@@ -43,8 +43,11 @@ class Network:
     wps: bool = False
     beacons: int = 0
     data_packets: int = 0
-    first_seen: str = ""
-    last_seen: str = ""
+    data_per_sec: int = 0
+    manuf: str = ""
+    he: bool = False
+    first_seen: int = 0
+    last_seen: int = 0
 
     def display_name(self) -> str:
         """Return ESSID or [HIDDEN] if empty."""
@@ -70,8 +73,13 @@ class Client:
     signal: int = 0
     packets: int = 0
     probe: str = ""
-    first_seen: str = ""
-    last_seen: str = ""
+    manuf: str = ""
+    eapol: bool = False
+    assoc_req: int = 0
+    probe_req: int = 0
+    deauth: int = 0
+    first_seen: int = 0
+    last_seen: int = 0
 
 
 @dataclass

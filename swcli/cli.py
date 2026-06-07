@@ -134,11 +134,11 @@ async def handle_adapters(args):
         return
 
     print(f"{'#':<3} {'Interface':<15} {'Chipset':<12} {'Driver':<12} {'Bus':<5} {'Mode':<8} {'Bands':<8} {'Monitor':<7} {'Inject':<7} {'Status'}")
-    for i, (iface, info) in enumerate(adapters.items(), 1):
+    for i, info in enumerate(adapters, 1):
         bands = "/".join(info.bands)
         print(f"{i:<3} {info.iface:<15} {info.chipset:<12} {info.driver:<12} {info.bus:<5} {info.current_mode:<8} {bands:<8} {'YES' if info.monitor_capable else 'NO':<7} {'YES' if info.injection_capable else 'NO':<7} {info.status}")
     print(f"\nTotal: {len(adapters)} adapters found")
-    print("Use: swcli monitor <interface> to enter monitor mode")
+    print("Use: swcli monitor start <interface> to enter monitor mode")
 
 async def handle_kill(args):
     check_sidewinder()
@@ -150,8 +150,8 @@ async def handle_kill(args):
         return
         
     print("Conflicting services found:")
-    for svc in result:
-        print(f"  PID {svc.pid} - {svc.name}")
+    for pid, name in result:
+        print(f"  PID {pid} - {name}")
         
     print("\nWARNING: This will disconnect you from WiFi.")
     if confirm_action("Kill these services?"):
@@ -200,7 +200,7 @@ async def handle_monitor(args):
     elif cmd == "status":
         mode = get_interface_mode_sync(args.iface)
         print(f"Interface: {args.iface}\nMode:      {mode}")
-    else:
+    elif cmd == "start":
         if not args.iface:
             print_error("Missing argument <interface>")
             return
@@ -217,6 +217,8 @@ async def handle_monitor(args):
                 print_error(f"{e.what} - {e.why}")
         else:
             print_info("Aborted")
+    else:
+        print_error("Invalid monitor command. Use: start, stop, or status.")
 
 
 # --- 3. SCAN ---
@@ -502,7 +504,14 @@ async def handle_session(args):
         s = Session.load(args.file)
         print_success(f"Session loaded.")
     elif cmd == "list":
-        print_info("Not fully implemented.")
+        import glob
+        files = glob.glob(os.path.expanduser("~/.sidewinder/*.json"))
+        if not files:
+            print_info("No saved sessions found in ~/.sidewinder")
+        else:
+            print("Saved sessions:")
+            for f in files:
+                print(f"  - {f}")
 
 async def handle_config(args):
     check_sidewinder()
@@ -547,10 +556,12 @@ def main():
 
     # MONITOR
     p_mon = subparsers.add_parser("monitor", help="Enter monitor mode")
-    p_mon.add_argument("iface", nargs="?", help="Interface to use")
-    p_mon.add_argument("--channel", type=int, default=1)
-    
     m_subs = p_mon.add_subparsers(dest="monitor_cmd")
+    
+    m_start = m_subs.add_parser("start", help="Start monitor mode")
+    m_start.add_argument("iface", help="Interface to use")
+    m_start.add_argument("--channel", type=int, default=1)
+    
     m_stop = m_subs.add_parser("stop", help="Exit monitor mode")
     m_stop.add_argument("mon")
     m_stop.add_argument("--interface")

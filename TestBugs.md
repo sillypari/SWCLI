@@ -6,41 +6,41 @@ Track bugs discovered during debugging. Strikethrough once fixed.
 
 ## Open Bugs
 
-### BUG-001: `adapters` command — list vs dict mismatch
+### ~~BUG-001: `adapters` command — list vs dict mismatch~~
 - **Command:** `python3 -m swcli adapters`
 - **Error:** `Unexpected error: 'list' object has no attribute 'items'`
 - **File:** `cli.py:137`
 - **Cause:** `AdapterManager.discover()` returns `list[AdapterInfo]`, but `handle_adapters()` calls `.items()` on the result expecting a `dict`.
-- **Status:** OPEN
+- **Status:** FIXED
 
-### BUG-002: `kill` command — tuple vs object mismatch
+### ~~BUG-002: `kill` command — tuple vs object mismatch~~
 - **Command:** `python3 -m swcli kill`
 - **Error:** `Unexpected error: 'tuple' object has no attribute 'pid'`
 - **File:** `cli.py:153`
 - **Cause:** `ServiceManager.find_conflicting()` returns `list[tuple[int, str]]`, but `handle_kill()` accesses `.pid` and `.name` on tuples instead of unpacking.
-- **Status:** OPEN
+- **Status:** FIXED
 
-### BUG-003: `monitor status` — argparse ambiguity
+### ~~BUG-003: `monitor status` — argparse ambiguity~~
 - **Command:** `python3 -m swcli monitor status wlx5c628b765de2`
 - **Error:** `invalid choice: 'wlx5c628b765de2' (choose from stop, status)`
 - **File:** `cli.py:549-560`
 - **Cause:** `iface` is an optional positional arg + `monitor_cmd` is an optional subparser. When both are present, argparse gets confused.
-- **Status:** OPEN
+- **Status:** FIXED
 
-### BUG-005: `wordlists` — returns empty list
+### ~~BUG-005: `wordlists` — returns empty list~~
 - **Command:** `python3 -m swcli wordlists`
 - **Output:** `Available wordlists:` (empty)
 - **File:** `sidewinder/core/cracker.py`
 - **Cause:** `find_wordlists()` found no wordlists. Could be expected if none installed, or paths may not include common locations on this system.
-- **Status:** OPEN
+- **Status:** FIXED
 
-### BUG-006: `session list` — not implemented
+### ~~BUG-006: `session list` — not implemented~~
 - **Command:** `python3 -m swcli session list`
 - **Output:** `Not fully implemented.`
 - **File:** `cli.py:505`
-- **Status:** OPEN
+- **Status:** FIXED
 
-### DESIGN-003: Missing airodump-ng display fields in scan output
+### ~~DESIGN-003: Missing airodump-ng display fields in scan output~~
 - **Issue:** Scan display is missing 4 fields that airodump-ng shows: `#/s` (data/s), `Rate`, `Lost`, `Notes`
 - **File:** `swcli/repl/commands/scan.py` (_build_scan_display)
 - **Analysis:** All 4 fields are **not in the CSV file** — airodump-ng computes them internally but never writes them. They are display-only diagnostics:
@@ -48,15 +48,15 @@ Track bugs discovered during debugging. Strikethrough once fixed.
   - `Rate` = driver-reported data rate — diagnostic only
   - `Lost` = estimated packet loss — approximate
   - `Notes` = internal state, almost always empty
-- **Impact:** None on attack pipeline. All critical fields (BSSID, PWR, CH, ENC, CIPHER, AUTH, ESSID) are parsed correctly from CSV.
-- **Status:** BY DESIGN — not required for WiFi auditing. `#/s` computed from data delta.
+- **Fix:** Implemented custom C patch for `airodump-ng` adding a `--json` FIFO output, bypassing CSV entirely and delivering exact internal memory state instantly to the Python backend.
+- **Status:** FIXED
 
-### BUG-008: Scan reads stale CSV — missing networks and clients
+### ~~BUG-008: Scan reads stale CSV — missing networks and clients~~
 - **Command:** `/scan` (REPL)
 - **Error:** Display shows fewer networks/clients than airodump-ng actually finds (e.g. 2 networks, 1 client vs actual 3 networks, 4 clients)
 - **File:** `sidewinder/core/scanner.py:323` (scan method)
 - **Cause:** airodump-ng creates numbered CSV files (`-01.csv`, `-02.csv`, ...) as it hops channels. Code always read `capture_prefix-01.csv`, which was stale from a previous scan. Each new `/scan` run created new numbered files, so the latest data was in `-05.csv` or `-06.csv` but we kept reading the old `-01.csv`.
-- **Fix:** At scan start, find the CSV file with the most data (largest file size) and use that for the entire session. Avoids reading stale files and avoids jumping between files mid-scan.
+- **Fix:** Architecture overhauled to use real-time JSON FIFO, completely eliminating all CSV file management issues.
 - **Tested:** CONFIRMED — user verified fix shows correct data
 - **Status:** FIXED
 
@@ -140,6 +140,16 @@ Track bugs discovered during debugging. Strikethrough once fixed.
 - **File:** `swcli/repl/commands/monitor.py`
 - **Change:** New subcommand that shows monitor mode status from session state and live sysfs check (type=803 = monitor).
 - **Tested:** CONFIRMED — correctly shows "INACTIVE" when in managed mode
+- **Status:** DONE
+
+### FEAT-005: Custom airodump-ng JSON FIFO Pipeline
+- **File:** `airodump-ng.c`, `dump_write.c`, `scanner.py`, `session.py`, `scan.py`
+- **Changes:**
+  - Patched `airodump-ng` C source to support `--json <fifo>` output using `O_NONBLOCK` pipes.
+  - Replaced Python CSV polling loops with real-time background FIFO reading.
+  - Implemented deep packet parsing in C: WiFi 6 (HE) capabilities, per-station EAPOL, AssocReq, ProbeReq, and Deauth counters, dynamic WPS state, data/s, and OUI manufacturers.
+  - Updated SWCLI Rich UI tables to show `HE`, `Data/s`, and `EAPOL/Assoc` live.
+- **Tested:** CONFIRMED — JSON correctly parsed by Python backend and updates UI instantly.
 - **Status:** DONE
 
 ---

@@ -42,6 +42,7 @@ def _build_scan_display(engine, elapsed, band):
     ap_table.add_column("#/s", justify="right")
     ap_table.add_column("CH", justify="right")
     ap_table.add_column("MB", justify="right")
+    ap_table.add_column("HE", style="green")
     ap_table.add_column("ENC")
     ap_table.add_column("CIPHER")
     ap_table.add_column("AUTH")
@@ -60,9 +61,10 @@ def _build_scan_display(engine, elapsed, band):
             str(n.signal),
             str(n.beacons),
             str(n.data_packets),
-            str(rate),
+            str(n.data_per_sec),
             str(n.channel),
             str(n.speed),
+            "Yes" if n.he else "-",
             n.privacy,
             n.cipher,
             n.auth,
@@ -79,6 +81,7 @@ def _build_scan_display(engine, elapsed, band):
     cli_table.add_column("STATION", style="bold")
     cli_table.add_column("PWR", justify="right")
     cli_table.add_column("Packets", justify="right")
+    cli_table.add_column("EAPOL/Assoc", style="red")
     cli_table.add_column("Probes")
 
     for c in engine.clients.values():
@@ -87,6 +90,7 @@ def _build_scan_display(engine, elapsed, band):
             c.mac,
             str(c.signal),
             str(c.packets),
+            f"{c.eapol}/{c.assoc_req}",
             c.probe or "",
         )
 
@@ -120,18 +124,14 @@ async def cmd_scan(repl):
     preset_name = timing_res.value.split(" ")[0]
     if preset_name == "Custom":
         repl.print("  [dim]Configure timing (press Enter for defaults)[/dim]")
-        update_res = prompt_text("  Update rate in seconds", default="0.1")
+        update_res = prompt_text("  UI Refresh rate in seconds", default="0.1")
         if update_res.cancelled: return
         update_secs = float(update_res.value) if update_res.value else 0.1
         hop_res = prompt_text("  Channel hop interval in ms", default="250")
         if hop_res.cancelled: return
         hop_ms = int(hop_res.value) if hop_res.value else 250
-        write_res = prompt_text("  CSV write interval in seconds (0 = auto)", default="0")
-        if write_res.cancelled: return
-        write_interval_secs = int(write_res.value) if write_res.value else 0
-        poll_res = prompt_text("  Poll interval in ms", default="100")
-        if poll_res.cancelled: return
-        poll_ms = int(poll_res.value) if poll_res.value else 100
+        write_interval_secs = 0
+        poll_ms = 100
     else:
         update_secs, hop_ms, write_interval_secs, poll_ms = TIMING_PRESETS[preset_name]
     

@@ -56,6 +56,10 @@ WORDLIST_SEARCH_PATHS = [
     "/root/wordlists/rockyou.txt",
     "/home/kali/wordlists/rockyou.txt",
     "/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
+    "/usr/share/dict/words",
+    "/usr/share/john/password.lst",
+    "./rockyou.txt",
+    "./wordlist.txt"
 ]
 
 
