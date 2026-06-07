@@ -93,3 +93,53 @@ class Adapter(ABC):
     def supports_operation(self, operation: str) -> bool:
         """Check if this adapter supports a given operation."""
         return CARD_SETTINGS.get(self.chipset, {}).get(operation) is not None
+
+
+class BadDriverWarning(Warning):
+    """Raised when an adapter has a suboptimal driver but can still operate."""
+    pass
+
+
+class GenericAdapter(Adapter):
+    """Generic adapter that uses standard core.monitor functions without optimizations."""
+    
+    def __init__(self, iface: str, phy: str, chipset: str) -> None:
+        self._iface = iface
+        self._phy = phy
+        self._chipset = chipset
+        
+    @property
+    def name(self) -> str:
+        return f"Generic ({self._chipset})"
+
+    @property
+    def iface(self) -> str:
+        return self._iface
+
+    @property
+    def phy(self) -> str:
+        return self._phy
+
+    @property
+    def chipset(self) -> str:
+        return self._chipset
+
+    @property
+    def monitor_capable(self) -> bool:
+        return True  # Assumed true if it reached here
+
+    @property
+    def injection_capable(self) -> bool:
+        return False # Generic cannot guarantee injection
+        
+    async def enter_monitor(self) -> str:
+        from ..core.monitor import enter_monitor_mode
+        return await enter_monitor_mode(self._iface, self._phy, channel=6)
+        
+    async def exit_monitor(self, mon_iface: str) -> None:
+        from ..core.monitor import exit_monitor_mode
+        await exit_monitor_mode(mon_iface, "", "")
+        
+    async def set_channel(self, channel: int) -> None:
+        from ..core.monitor import set_channel as generic_set_channel
+        await generic_set_channel(self._iface, channel)

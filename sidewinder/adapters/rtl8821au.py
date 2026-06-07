@@ -126,13 +126,15 @@ class RTL8821AUAdapter(Adapter):
         Raises:
             RuntimeError: If morrownr driver not loaded.
         """
+        from .base import BadDriverWarning
         if not await detect_rtl8821au_morrownr():
             if await detect_rtw88_loaded():
-                raise RuntimeError(
-                    "RTL8821AU: rtw88 driver loaded — monitor mode not supported. "
-                    "Install morrownr: https://github.com/morrownr/8821au-20210708"
+                raise BadDriverWarning(
+                    "RTL8821AU: Ubuntu's default rtw88 driver is loaded. "
+                    "This driver does NOT natively support monitor mode.\n"
+                    "For full features, install morrownr: https://github.com/morrownr/8821au-20210708"
                 )
-            raise RuntimeError(
+            raise BadDriverWarning(
                 "RTL8821AU: no compatible driver loaded. "
                 "Install morrownr driver and reboot."
             )

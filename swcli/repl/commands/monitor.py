@@ -24,22 +24,44 @@ async def cmd_monitor_start(repl):
     repl.print(f"\n  [bold]Adapter:[/bold]  {iface.iface} ({iface.chipset})")
     repl.print(f"  [bold]PHY:[/bold]      {iface.phy}")
 
+    adapter = manager.get_adapter_instance(iface)
+    repl.print(f"  [bold]Profile:[/bold]  [cyan]{adapter.name}[/cyan]")
+
     conf = prompt_confirm("Enable monitor mode?")
     if conf.cancelled or not conf.value:
         repl.print("[yellow]Cancelled.[/yellow]")
         return
 
+    from sidewinder.adapters.base import BadDriverWarning, GenericAdapter
     try:
-        mon_iface = await enter_monitor_mode(iface.iface, iface.phy, channel=6)
-        if mon_iface == iface.iface:
-            print_success(f"Monitor mode active: {iface.iface}")
-        else:
-            print_success(f"Monitor mode active: {mon_iface} (created from {iface.iface})")
-        repl.session.monitor_mode = True
-        repl.session.monitor_iface = mon_iface
-        repl.session.last_iface = mon_iface
+        mon_iface = await adapter.enter_monitor()
+    except BadDriverWarning as w:
+        repl.print(f"\n[bold yellow]Driver Warning:[/bold yellow] {w}")
+        conf = prompt_confirm("Continue with generic fallback? (Not recommended)")
+        if conf.cancelled or not conf.value:
+            repl.print("[yellow]Cancelled.[/yellow]")
+            return
+        
+        adapter = GenericAdapter(iface.iface, iface.phy, iface.chipset)
+        repl.print(f"  [bold]Profile:[/bold]  [cyan]{adapter.name}[/cyan] (Generic Fallback)")
+        try:
+            mon_iface = await adapter.enter_monitor()
+        except Exception as e:
+            print_error(f"Generic fallback failed: {e}")
+            return
     except Exception as e:
         print_error(f"Failed to enable monitor mode: {e}")
+        return
+
+    if mon_iface == iface.iface:
+        print_success(f"Monitor mode active: {iface.iface} (Optimizations applied via {adapter.name})")
+    else:
+        print_success(f"Monitor mode active: {mon_iface} (created from {iface.iface}) (Optimizations applied via {adapter.name})")
+        
+    repl.session.adapter = adapter
+    repl.session.monitor_mode = True
+    repl.session.monitor_iface = mon_iface
+    repl.session.last_iface = mon_iface
 
 async def cmd_monitor_stop(repl):
     iface = repl.session.monitor_iface or repl.session.last_iface
@@ -56,9 +78,15 @@ async def cmd_monitor_stop(repl):
         return
         
     try:
-        await exit_monitor_mode(iface, "", "") # Best effort
+        adapter = getattr(repl.session, 'adapter', None)
+        if adapter:
+            await adapter.exit_monitor(iface)
+        else:
+            await exit_monitor_mode(iface, "", "") # Best effort
+            
         print_success("Monitor mode stopped.")
         repl.session.monitor_mode = False
+        repl.session.adapter = None
     except Exception as e:
         print_error(f"Failed: {e}")
 

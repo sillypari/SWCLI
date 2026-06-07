@@ -68,6 +68,22 @@ class AdapterManager:
             self.adapters[iface] = info
         return info
 
+    def get_adapter_instance(self, info: AdapterInfo) -> 'Adapter':
+        """Instantiate the concrete Adapter class for the given hardware."""
+        from .rtl8821au import RTL8821AUAdapter
+        from .rt5370 import RT5370Adapter
+        from .mt7902 import MT7902Adapter
+        from .base import GenericAdapter
+
+        if info.chipset == "RTL8821AU" or info.chipset == "RTL8812AU":
+            return RTL8821AUAdapter(info.iface, info.phy)
+        elif info.chipset == "RT5370":
+            return RT5370Adapter(info.iface, info.phy)
+        elif info.chipset == "MT7902":
+            return MT7902Adapter(info.iface, info.phy)
+        else:
+            return GenericAdapter(info.iface, info.phy, info.chipset)
+
 
 class FailoverManager:
     """Execute operations with automatic adapter failover.
