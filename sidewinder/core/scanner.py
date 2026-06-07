@@ -86,6 +86,7 @@ class ScanEngine:
 
         logger.info("Starting scan on %s with JSON FIFO", mon_iface)
         self._running = True
+        asyncio.ensure_future(self._stale_eviction_loop())
 
         if "MOCK" in mon_iface:
             mock_nets = [
@@ -160,6 +161,7 @@ class ScanEngine:
             pass
         except Exception as e:
             logger.debug("JSON parsing error: %s", e)
+        self._enforce_limits()
 
 
     def _enforce_limits(self):
