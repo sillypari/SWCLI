@@ -46,6 +46,7 @@ class Network:
     data_per_sec: int = 0
     manuf: str = ""
     he: bool = False
+    eapol: bool = False
     first_seen: int = 0
     last_seen: int = 0
 
@@ -74,10 +75,8 @@ class Client:
     packets: int = 0
     probe: str = ""
     manuf: str = ""
+    he: bool = False
     eapol: bool = False
-    assoc_req: int = 0
-    probe_req: int = 0
-    deauth: int = 0
     first_seen: int = 0
     last_seen: int = 0
 
@@ -153,6 +152,7 @@ class Session:
     scan_results: list[Network] = field(default_factory=list)
     clients: list[Client] = field(default_factory=list)
     selected_target: Optional[Network] = None
+    last_capture: str = ""
     captures: list[str] = field(default_factory=list)
     handshake: Optional[HandshakeResult] = None
     cracked_passwords: list[CrackResult] = field(default_factory=list)
@@ -164,6 +164,7 @@ class Session:
         """Save session to a JSON file and return the path written.
 
         Creates parent directories if they do not already exist.
+        If path is a directory, appends session.json inside it.
 
         Args:
             path: Optional override path.  Defaults to DEFAULT_PATH.
@@ -173,6 +174,8 @@ class Session:
         """
         from .config import expand_user_path
         save_path = expand_user_path(path or self.DEFAULT_PATH)
+        if os.path.isdir(save_path):
+            save_path = os.path.join(save_path, "session.json")
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         with open(save_path, "w") as f:
             json.dump(asdict(self), f, indent=2, default=str)

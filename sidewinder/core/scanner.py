@@ -45,6 +45,8 @@ class ScanEngine:
 
         self.networks: dict[str, Network] = {}
         self.clients: dict[str, Client] = {}
+        self._data_rate_prev: dict[str, tuple[int, float]] = {}
+        self.current_channel: int = 0
 
         
     async def scan(
@@ -74,6 +76,7 @@ class ScanEngine:
             "airodump-ng",
             mon_iface,
             "--json", fifo_path,
+            "-w", capture_prefix,
             "-a",
             "--wps",
             "--update", str(update_secs),
@@ -86,7 +89,6 @@ class ScanEngine:
 
         logger.info("Starting scan on %s with JSON FIFO", mon_iface)
         self._running = True
-        asyncio.ensure_future(self._stale_eviction_loop())
 
         if "MOCK" in mon_iface:
             mock_nets = [
@@ -110,8 +112,9 @@ class ScanEngine:
         def fifo_reader():
             try:
                 with open(fifo_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if not self._running:
+                    while self._running:
+                        line = f.readline()
+                        if not line:
                             break
                         q.put(line)
             except Exception as e:
@@ -131,7 +134,7 @@ class ScanEngine:
                     line = q.get_nowait()
                     self._parse_json(line, on_network, on_client)
             except queue.Empty:
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.01)
 
     def _parse_json(
         self,
@@ -144,19 +147,42 @@ class ScanEngine:
             if data.get("type") != "update":
                 return
             
+            self.current_channel = data.get("current_channel", 0)
+
+            # Track what's in this update for immediate purge
+            seen_nets: set[str] = set()
+            seen_clients: set[str] = set()
+
             for n_dict in data.get("networks", []):
                 n = Network(**n_dict)
+                # Skip broadcast/bogus entries
+                if n.bssid == "ff:ff:ff:ff:ff:ff" or n.channel < 1:
+                    continue
                 existing = self.networks.get(n.bssid)
                 self.networks[n.bssid] = n
+                seen_nets.add(n.bssid)
                 if on_network and (not existing or n.signal != existing.signal or n.data_packets != existing.data_packets):
                     on_network(n)
                     
             for c_dict in data.get("clients", []):
                 c = Client(**c_dict)
+                # Skip clients on broadcast BSSID
+                if c.bssid == "ff:ff:ff:ff:ff:ff":
+                    continue
                 existing = self.clients.get(c.mac)
                 self.clients[c.mac] = c
+                seen_clients.add(c.mac)
                 if on_client and (not existing or c.signal != existing.signal or c.packets != existing.packets):
                     on_client(c)
+
+            # Immediate purge: remove entries not in this update
+            gone_nets = [b for b in self.networks if b not in seen_nets]
+            for b in gone_nets:
+                del self.networks[b]
+            gone_clients = [m for m in self.clients if m not in seen_clients]
+            for m in gone_clients:
+                del self.clients[m]
+
         except json.JSONDecodeError:
             pass
         except Exception as e:
@@ -172,15 +198,6 @@ class ScanEngine:
             oldest = min(self.clients, key=lambda m: self.clients[m].last_seen)
             del self.clients[oldest]
 
-    async def _stale_eviction_loop(self):
-        while self._running:
-            await asyncio.sleep(30)
-            now = time.time()
-            stale = [b for b, n in self.networks.items()
-                     if n.last_seen and (now - float(n.last_seen)) > STALE_TIMEOUT_SECS]
-            for b in stale:
-                del self.networks[b]
-
     def stop(self) -> None:
         """Stop scanning."""
         self._running = False
@@ -191,11 +208,22 @@ class ScanEngine:
         if self._proc:
             await self.mgr.kill_background(self._proc)
             self._proc = None
+        # Remove FIFO
         if hasattr(self, 'fifo_path') and os.path.exists(self.fifo_path):
             try:
                 os.unlink(self.fifo_path)
             except OSError:
                 pass
+        # Remove extra airodump-ng output files (csv, kismet, netxml) but keep .cap
+        if hasattr(self, 'fifo_path'):
+            base = self.fifo_path.replace("_fifo.json", "")
+            for ext in (".csv", ".kismet.csv", ".kismet.netxml", ".cap.xml"):
+                f = f"{base}-01{ext}"
+                if os.path.exists(f):
+                    try:
+                        os.unlink(f)
+                    except OSError:
+                        pass
 
     def get_networks(self) -> list[Network]:
         """Get all discovered networks, sorted by signal strength."""

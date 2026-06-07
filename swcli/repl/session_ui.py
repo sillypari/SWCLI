@@ -13,6 +13,7 @@ class UISession:
         self.last_cap_file: str = ""
         self.scan_results = []
         self.clients = []
+        self.captures: list[str] = []
         self.monitor_mode: bool = False
         self.monitor_iface: str = ""
     

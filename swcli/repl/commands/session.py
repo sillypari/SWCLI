@@ -15,6 +15,9 @@ async def cmd_session_save(repl):
     session = Session(
         adapter=repl.session.last_iface,
         scan_results=repl.session.scan_results,
+        clients=repl.session.clients,
+        last_capture=repl.session.last_cap_file,
+        captures=repl.session.captures,
     )
 
     try:
@@ -48,6 +51,8 @@ async def cmd_session_load(repl):
         repl.session.scan_results = session.scan_results
         repl.session.clients = session.clients
         repl.session.last_iface = session.adapter
+        repl.session.last_cap_file = session.last_capture
+        repl.session.captures = session.captures
         if session.selected_target:
             repl.session.last_bssid = session.selected_target.bssid
             repl.session.last_channel = session.selected_target.channel
