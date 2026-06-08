@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SWCLI - Sidewinder Command Line Interface Toolkit
+SWCLI - Wireless Audit Console
 Implements human-driven attack pipelines requiring explicit confirmation.
 """
 import argparse
@@ -116,10 +116,13 @@ async def handle_adapters(args):
     adapters = await manager.discover()
     
     if args.info == "info":
-        if not args.info_iface or args.info_iface not in adapters:
-            print_error(f"Adapter not found or missing interface name.")
+        if not args.info_iface:
+            print_error("Adapter missing interface name.")
             return
-        info = adapters[args.info_iface]
+        info = next((a for a in adapters if a.iface == args.info_iface), None)
+        if not info:
+            print_error(f"Adapter not found: {args.info_iface}")
+            return
         print(f"Interface:      {info.iface}")
         print(f"PHY:            {info.phy}")
         print(f"Chipset:        {info.chipset}")
@@ -128,16 +131,18 @@ async def handle_adapters(args):
         print(f"MAC:            {info.mac}")
         print(f"Bands:          {', '.join(info.bands)}")
         print(f"Current Mode:   {info.current_mode}")
-        print(f"Monitor:        {'YES' if info.monitor_capable else 'NO'}")
-        print(f"Injection:      {'YES' if info.injection_capable else 'NO'}")
+        print(f"Monitor Report: {'YES' if info.monitor_capable else 'NO'}")
+        print(f"Inject Report:  {'YES' if info.injection_capable else 'NO'}")
+        print("Runtime Test:   not run")
         print(f"Status:         {info.status}")
         return
 
-    print(f"{'#':<3} {'Interface':<15} {'Chipset':<12} {'Driver':<12} {'Bus':<5} {'Mode':<8} {'Bands':<8} {'Monitor':<7} {'Inject':<7} {'Status'}")
+    print(f"{'#':<3} {'Interface':<15} {'Chipset':<12} {'Driver':<12} {'Bus':<5} {'Mode':<8} {'Bands':<8} {'MonRpt':<7} {'InjRpt':<7} {'Status'}")
     for i, info in enumerate(adapters, 1):
         bands = "/".join(info.bands)
         print(f"{i:<3} {info.iface:<15} {info.chipset:<12} {info.driver:<12} {info.bus:<5} {info.current_mode:<8} {bands:<8} {'YES' if info.monitor_capable else 'NO':<7} {'YES' if info.injection_capable else 'NO':<7} {info.status}")
     print(f"\nTotal: {len(adapters)} adapters found")
+    print("Monitor/injection values are reported capabilities; runtime behavior can differ.")
     print("Use: swcli monitor start <interface> to enter monitor mode")
 
 async def handle_kill(args):
@@ -532,7 +537,7 @@ async def handle_config(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="SWCLI - Sidewinder Command Line Interface Toolkit",
+        description="SWCLI - Wireless Audit Console",
         formatter_class=argparse.RawTextHelpFormatter
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

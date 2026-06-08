@@ -2,6 +2,7 @@ from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.renderer import print_table, print_success, print_error
 from sidewinder.adapters import AdapterManager
 from sidewinder.core.services import get_service_manager
+from sidewinder.core.subprocess_mgr import run
 from swcli.repl.prompts import prompt_confirm, prompt_choice
 
 async def cmd_adapters(repl):
@@ -17,7 +18,7 @@ async def cmd_adapters(repl):
         repl.print("[yellow]No wireless adapters found.[/yellow]")
         return
         
-    headers = ["#", "Interface", "Chipset", "Driver", "Bands", "Mode", "Monitor", "Inject", "Status"]
+    headers = ["#", "Interface", "Chipset", "Driver", "Bands", "Mode", "Monitor Report", "Inject Report", "Status"]
     rows = []
     
     for i, a in enumerate(adapters, 1):
@@ -35,6 +36,7 @@ async def cmd_adapters(repl):
     
     print_table(headers, rows, "Wireless Adapters")
     repl.print(f"\n  Total: {len(adapters)} adapters")
+    repl.print("  [dim]Monitor/Inject are reported capabilities. Some drivers under-report; runtime behavior can differ.[/dim]")
     repl.print("  Use: /monitor to enter monitor mode")
 
 async def cmd_adapters_info(repl):
@@ -62,9 +64,49 @@ async def cmd_adapters_info(repl):
     repl.print(f"  MAC:            {info.mac}")
     repl.print(f"  Bands:          {', '.join(info.bands)}")
     repl.print(f"  Current Mode:   {info.current_mode}")
-    repl.print(f"  Monitor:        {'YES' if info.monitor_capable else 'NO'}")
-    repl.print(f"  Injection:      {'YES' if info.injection_capable else 'NO'}")
+    repl.print(f"  Monitor Report: {'YES' if info.monitor_capable else 'NO'}")
+    repl.print(f"  Inject Report:  {'YES' if info.injection_capable else 'NO'}")
+    repl.print("  Runtime Test:   not run")
     repl.print(f"  Status:         {info.status}")
+
+
+async def cmd_adapters_test_injection(repl):
+    """Actively test packet injection on a selected monitor interface."""
+    try:
+        manager = AdapterManager()
+        adapters = await manager.discover()
+    except Exception:
+        adapters = []
+
+    monitor_adapters = [a for a in adapters if a.current_mode == "monitor"]
+    if not monitor_adapters:
+        print_error("No monitor interfaces found. Run /monitor first.")
+        return
+
+    choices = [
+        f"{a.iface} ({a.chipset or a.driver or 'unknown'}) reported injection={'YES' if a.injection_capable else 'NO'}"
+        for a in monitor_adapters
+    ]
+    res = prompt_choice("Select monitor interface to test", choices)
+    if res.cancelled:
+        return
+
+    adapter = monitor_adapters[choices.index(res.value)]
+    repl.print("\n  [yellow]This runs aireplay-ng's active injection test on the selected monitor interface.[/yellow]")
+    conf = prompt_confirm(f"Run injection test on {adapter.iface}?")
+    if conf.cancelled or not conf.value:
+        repl.print("  [yellow]Aborted.[/yellow]")
+        return
+
+    result = await run(["aireplay-ng", "--test", adapter.iface], timeout=45.0, check=False)
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    passed = result.success and "Injection is working" in output
+    if passed:
+        print_success(f"Runtime injection test passed on {adapter.iface}.")
+    else:
+        print_error(f"Runtime injection test did not pass on {adapter.iface}.")
+    if output:
+        repl.print(f"\n[dim]{output[-2000:]}[/dim]")
 
 async def cmd_services_kill(repl):
     """Kill conflicting services."""
@@ -77,8 +119,8 @@ async def cmd_services_kill(repl):
         return
         
     repl.print("\n  Conflicting services found:")
-    for svc in result:
-        repl.print(f"    PID {svc.pid} - {svc.name}")
+    for pid, name in result:
+        repl.print(f"    PID {pid} - {name}")
         
     repl.print("\n  [yellow]WARNING: This will disconnect you from WiFi.[/yellow]")
     res = prompt_confirm("Kill these services?")
@@ -114,5 +156,6 @@ async def cmd_services_restore(repl):
 def register_commands(palette: CommandPalette):
     palette.register(Command("/adapters", "List wireless adapters", "Hardware", cmd_adapters, requires_root=False))
     palette.register(Command("/adapters info", "Show adapter details", "Hardware", cmd_adapters_info, requires_root=False))
+    palette.register(Command("/adapters test injection", "Actively test packet injection", "Hardware", cmd_adapters_test_injection, requires_root=True))
     palette.register(Command("/services", "Kill conflicting services", "Setup", cmd_services_kill, requires_root=True))
     palette.register(Command("/services restore", "Restore services", "Setup", cmd_services_restore, requires_root=True))

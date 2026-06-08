@@ -15,9 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import time
-from enum import Enum, auto
 from typing import Callable, Optional
 
 from ..core.session import Client, Network
@@ -33,7 +31,6 @@ STALE_TIMEOUT_SECS = 120  # remove entries not seen for this long
 
 import json
 import threading
-import queue
 
 class ScanEngine:
     """Run airodump-ng and emit discovered networks and clients in real-time via JSON FIFO."""
@@ -43,8 +40,9 @@ class ScanEngine:
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._running = False
 
-        self.networks: dict[str, Network] = {}
         self.clients: dict[str, Client] = {}
+        self.recent_networks: dict[str, float] = {}
+        self.recent_clients: dict[str, float] = {}
         self._data_rate_prev: dict[str, tuple[int, float]] = {}
         self.current_channel: int = 0
 
@@ -79,13 +77,15 @@ class ScanEngine:
             "-w", capture_prefix,
             "-a",
             "--wps",
-            "--update", str(update_secs),
             "-f", str(hop_ms),
         ]
         if band:
             cmd.extend(["--band", band])
         if channels:
             cmd.extend(["--channel", ",".join(str(c) for c in channels)])
+            
+        if update_secs >= 1:
+            cmd.extend(["--update", str(int(update_secs))])
 
         logger.info("Starting scan on %s with JSON FIFO", mon_iface)
         self._running = True
@@ -100,6 +100,7 @@ class ScanEngine:
                 if on_network:
                     for n in mock_nets:
                         self.networks[n.bssid] = n
+                        self.recent_networks[n.bssid] = time.time()
                         on_network(n)
             return
 
@@ -108,7 +109,8 @@ class ScanEngine:
         if on_init:
             on_init("ready")
 
-        q = queue.Queue()
+        from collections import deque
+        q = deque(maxlen=1)
         def fifo_reader():
             try:
                 with open(fifo_path, "r", encoding="utf-8") as f:
@@ -116,7 +118,7 @@ class ScanEngine:
                         line = f.readline()
                         if not line:
                             break
-                        q.put(line)
+                        q.append(line)
             except Exception as e:
                 logger.debug("FIFO reader error: %s", e)
 
@@ -128,13 +130,12 @@ class ScanEngine:
             logger.error("os.mkfifo not supported on this OS. Scan will not receive data.")
 
         while self._running:
-            try:
-                # Read all available items in the queue
-                while True:
-                    line = q.get_nowait()
-                    self._parse_json(line, on_network, on_client)
-            except queue.Empty:
-                await asyncio.sleep(0.01)
+            if q:
+                # Parse the absolutely latest JSON state to match screen refresh rate perfectly
+                # This drops intermediate frames silently and efficiently
+                self._parse_json(q[-1], on_network, on_client)
+                
+            await asyncio.sleep(poll_ms / 1000.0)
 
     def _parse_json(
         self,
@@ -149,7 +150,9 @@ class ScanEngine:
             
             self.current_channel = data.get("current_channel", 0)
 
-            # Track what's in this update for immediate purge
+            # Track what's in this update for immediate purge. The live table
+            # stays current-only; recent_* only powers separate UX context.
+            now = time.time()
             seen_nets: set[str] = set()
             seen_clients: set[str] = set()
 
@@ -160,17 +163,18 @@ class ScanEngine:
                     continue
                 existing = self.networks.get(n.bssid)
                 self.networks[n.bssid] = n
+                self.recent_networks[n.bssid] = now
                 seen_nets.add(n.bssid)
                 if on_network and (not existing or n.signal != existing.signal or n.data_packets != existing.data_packets):
                     on_network(n)
                     
             for c_dict in data.get("clients", []):
                 c = Client(**c_dict)
-                # Skip clients on broadcast BSSID
                 if c.bssid == "ff:ff:ff:ff:ff:ff":
                     continue
                 existing = self.clients.get(c.mac)
                 self.clients[c.mac] = c
+                self.recent_clients[c.mac] = now
                 seen_clients.add(c.mac)
                 if on_client and (not existing or c.signal != existing.signal or c.packets != existing.packets):
                     on_client(c)
@@ -183,16 +187,42 @@ class ScanEngine:
             for m in gone_clients:
                 del self.clients[m]
 
+            self._prune_recent(now)
+
         except json.JSONDecodeError:
             pass
         except Exception as e:
             logger.debug("JSON parsing error: %s", e)
         self._enforce_limits()
 
+    def _prune_recent(self, now: float | None = None) -> None:
+        now = now or time.time()
+        stale_nets = [
+            bssid for bssid, last_seen in self.recent_networks.items()
+            if now - last_seen > STALE_TIMEOUT_SECS
+        ]
+        for bssid in stale_nets:
+            del self.recent_networks[bssid]
+
+        stale_clients = [
+            mac for mac, last_seen in self.recent_clients.items()
+            if now - last_seen > STALE_TIMEOUT_SECS
+        ]
+        for mac in stale_clients:
+            del self.recent_clients[mac]
+
+    def get_recent_counts(self) -> dict[str, int]:
+        """Return recently-seen counts not present in the current live frame."""
+        self._prune_recent()
+        return {
+            "networks": sum(1 for bssid in self.recent_networks if bssid not in self.networks),
+            "clients": sum(1 for mac in self.recent_clients if mac not in self.clients),
+        }
+
 
     def _enforce_limits(self):
         if len(self.networks) > MAX_NETWORKS:
-            weakest = min(self.networks, key=lambda b: self.networks[b].signal)
+            weakest = min(self.networks, key=lambda b: self.networks[b].signal if self.networks[b].signal != -1 else -999)
             del self.networks[weakest]
         if len(self.clients) > MAX_CLIENTS:
             oldest = min(self.clients, key=lambda m: self.clients[m].last_seen)
@@ -229,7 +259,7 @@ class ScanEngine:
         """Get all discovered networks, sorted by signal strength."""
         return sorted(
             self.networks.values(),
-            key=lambda n: n.signal,
+            key=lambda n: n.signal if n.signal != -1 else -999,
             reverse=True,
         )
 

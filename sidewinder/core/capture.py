@@ -37,48 +37,170 @@ KEY_INFO_MIC      = 0x0100   # Bit 8: MIC present
 KEY_INFO_SECURE   = 0x0200   # Bit 9: Secure
 
 
-def is_m1(key_info: int) -> bool:
+def _key_attr(key, name: str, default: int = 0) -> int:
+    try:
+        return int(getattr(key, name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def is_m1(key) -> bool:
     """M1: Pairwise=1, Install=0, ACK=1, MIC=0, Secure=0."""
+    if isinstance(key, int):
+        return (
+            bool(key & KEY_INFO_PAIRWISE)
+            and not (key & KEY_INFO_INSTALL)
+            and bool(key & KEY_INFO_ACK)
+            and not (key & KEY_INFO_MIC)
+            and not (key & KEY_INFO_SECURE)
+        )
     return (
-        bool(key_info & KEY_INFO_PAIRWISE)
-        and not (key_info & KEY_INFO_INSTALL)
-        and bool(key_info & KEY_INFO_ACK)
-        and not (key_info & KEY_INFO_MIC)
-        and not (key_info & KEY_INFO_SECURE)
+        _key_attr(key, "key_type") == 1
+        and _key_attr(key, "install") == 0
+        and _key_attr(key, "key_ack") == 1
+        and _key_attr(key, "has_key_mic") == 0
+        and _key_attr(key, "secure") == 0
     )
 
 
-def is_m2(key_info: int) -> bool:
+def is_m2(key) -> bool:
     """M2: Pairwise=1, Install=0, ACK=0, MIC=1, Secure=0."""
+    if isinstance(key, int):
+        return (
+            bool(key & KEY_INFO_PAIRWISE)
+            and not (key & KEY_INFO_INSTALL)
+            and not (key & KEY_INFO_ACK)
+            and bool(key & KEY_INFO_MIC)
+            and not (key & KEY_INFO_SECURE)
+        )
     return (
-        bool(key_info & KEY_INFO_PAIRWISE)
-        and not (key_info & KEY_INFO_INSTALL)
-        and not (key_info & KEY_INFO_ACK)
-        and bool(key_info & KEY_INFO_MIC)
-        and not (key_info & KEY_INFO_SECURE)
+        _key_attr(key, "key_type") == 1
+        and _key_attr(key, "install") == 0
+        and _key_attr(key, "key_ack") == 0
+        and _key_attr(key, "has_key_mic") == 1
+        and _key_attr(key, "secure") == 0
     )
 
 
-def is_m3(key_info: int) -> bool:
+def is_m3(key) -> bool:
     """M3: Pairwise=1, Install=1, ACK=1, MIC=1, Secure=1."""
+    if isinstance(key, int):
+        return (
+            bool(key & KEY_INFO_PAIRWISE)
+            and bool(key & KEY_INFO_INSTALL)
+            and bool(key & KEY_INFO_ACK)
+            and bool(key & KEY_INFO_MIC)
+            and bool(key & KEY_INFO_SECURE)
+        )
     return (
-        bool(key_info & KEY_INFO_PAIRWISE)
-        and bool(key_info & KEY_INFO_INSTALL)
-        and bool(key_info & KEY_INFO_ACK)
-        and bool(key_info & KEY_INFO_MIC)
-        and bool(key_info & KEY_INFO_SECURE)
+        _key_attr(key, "key_type") == 1
+        and _key_attr(key, "install") == 1
+        and _key_attr(key, "key_ack") == 1
+        and _key_attr(key, "has_key_mic") == 1
+        and _key_attr(key, "secure") == 1
     )
 
 
-def is_m4(key_info: int) -> bool:
+def is_m4(key) -> bool:
     """M4: Pairwise=1, Install=0, ACK=0, MIC=1, Secure=1."""
+    if isinstance(key, int):
+        return (
+            bool(key & KEY_INFO_PAIRWISE)
+            and not (key & KEY_INFO_INSTALL)
+            and not (key & KEY_INFO_ACK)
+            and bool(key & KEY_INFO_MIC)
+            and bool(key & KEY_INFO_SECURE)
+        )
     return (
-        bool(key_info & KEY_INFO_PAIRWISE)
-        and not (key_info & KEY_INFO_INSTALL)
-        and not (key_info & KEY_INFO_ACK)
-        and bool(key_info & KEY_INFO_MIC)
-        and bool(key_info & KEY_INFO_SECURE)
+        _key_attr(key, "key_type") == 1
+        and _key_attr(key, "install") == 0
+        and _key_attr(key, "key_ack") == 0
+        and _key_attr(key, "has_key_mic") == 1
+        and _key_attr(key, "secure") == 1
     )
+
+
+def _eapol_key_candidates(pkt, eapol_cls) -> list:
+    """Return Scapy EAPOL-key representations across Scapy versions."""
+    eapol = pkt[eapol_cls]
+    candidates = []
+    if hasattr(eapol, "key_info"):
+        candidates.append(int(getattr(eapol, "key_info")))
+    payload = getattr(eapol, "payload", None)
+    if payload is not None and hasattr(payload, "key_ack"):
+        candidates.append(payload)
+    return candidates
+
+
+def _key_info_value(key) -> Optional[int]:
+    if isinstance(key, int):
+        return key
+    try:
+        pairwise = _key_attr(key, "key_type") << 3
+        install = _key_attr(key, "install") << 6
+        ack = _key_attr(key, "key_ack") << 7
+        mic = _key_attr(key, "has_key_mic") << 8
+        secure = _key_attr(key, "secure") << 9
+        return pairwise | install | ack | mic | secure
+    except Exception:
+        return None
+
+
+def _message_name(key) -> str:
+    if is_m1(key):
+        return "M1"
+    if is_m2(key):
+        return "M2"
+    if is_m3(key):
+        return "M3"
+    if is_m4(key):
+        return "M4"
+    return "UNKNOWN"
+
+
+def extract_handshake_messages(cap_file: str) -> list[dict[str, str]]:
+    """Extract first observed M1-M4 EAPOL key-info values from a capture file.
+
+    This is read-only and supports both Scapy key_info fields and payload
+    attribute representations used by different Scapy versions.
+    """
+    try:
+        from scapy.all import PcapReader  # type: ignore
+        from scapy.layers.eap import EAPOL  # type: ignore
+    except ImportError:
+        return []
+
+    messages: dict[str, dict[str, str]] = {}
+    try:
+        with PcapReader(cap_file) as reader:
+            for index, pkt in enumerate(reader, 1):
+                if not pkt.haslayer(EAPOL):
+                    continue
+                for candidate in _eapol_key_candidates(pkt, EAPOL):
+                    name = _message_name(candidate)
+                    if name == "UNKNOWN" or name in messages:
+                        continue
+                    key_info = _key_info_value(candidate)
+                    if key_info is None:
+                        continue
+                    messages[name] = {
+                        "message": name,
+                        "packet": str(index),
+                        "key_info_hex": f"0x{key_info:04x}",
+                        "key_info_binary": f"{key_info:016b}",
+                        "pairwise": "1" if key_info & KEY_INFO_PAIRWISE else "0",
+                        "install": "1" if key_info & KEY_INFO_INSTALL else "0",
+                        "ack": "1" if key_info & KEY_INFO_ACK else "0",
+                        "mic": "1" if key_info & KEY_INFO_MIC else "0",
+                        "secure": "1" if key_info & KEY_INFO_SECURE else "0",
+                    }
+                if len(messages) == 4:
+                    break
+    except Exception as e:
+        logger.debug("Cannot extract handshake messages from %s: %s", cap_file, e)
+        return []
+
+    return [messages[name] for name in ("M1", "M2", "M3", "M4") if name in messages]
 
 
 def validate_handshake(cap_file: str) -> HandshakeResult:
@@ -112,18 +234,15 @@ def validate_handshake(cap_file: str) -> HandshakeResult:
     m1 = m2 = m3 = m4 = False
 
     for pkt in eapols:
-        eapol = pkt[EAPOL]
-        if not hasattr(eapol, "key_info"):
-            continue
-        ki: int = eapol.key_info  # type: ignore
-        if is_m1(ki):
-            m1 = True
-        if is_m2(ki):
-            m2 = True
-        if is_m3(ki):
-            m3 = True
-        if is_m4(ki):
-            m4 = True
+        for eapol_key in _eapol_key_candidates(pkt, EAPOL):
+            if is_m1(eapol_key):
+                m1 = True
+            if is_m2(eapol_key):
+                m2 = True
+            if is_m3(eapol_key):
+                m3 = True
+            if is_m4(eapol_key):
+                m4 = True
 
     # Determine capture status
     if m1 and m2 and m3 and m4:
@@ -193,20 +312,31 @@ async def poll_eapol(
     status = "waiting"
 
     f = open(pcap_file, "rb")
+    reader = None
     try:
-        reader = PcapReader(f)
         while time.time() - start < timeout:
             try:
+                # If file is empty or header is not fully written, PcapReader raises Scapy_Exception
+                if os.path.getsize(pcap_file) < 24:
+                    await asyncio.sleep(poll_interval)
+                    continue
+                
+                if reader is None:
+                    try:
+                        reader = PcapReader(f)
+                    except Exception as e:
+                        # Header might not be completely flushed yet
+                        await asyncio.sleep(poll_interval)
+                        continue
+
                 for pkt in reader:
                     if pkt.haslayer(EAPOL):
                         eapol_count += 1
-                        eapol = pkt[EAPOL]
-                        if hasattr(eapol, "key_info"):
-                            ki: int = eapol.key_info
-                            if is_m1(ki): m1 = True
-                            if is_m2(ki): m2 = True
-                            if is_m3(ki): m3 = True
-                            if is_m4(ki): m4 = True
+                        for eapol_key in _eapol_key_candidates(pkt, EAPOL):
+                            if is_m1(eapol_key): m1 = True
+                            if is_m2(eapol_key): m2 = True
+                            if is_m3(eapol_key): m3 = True
+                            if is_m4(eapol_key): m4 = True
 
                 if m1 and m2 and m3 and m4:
                     status = "full"

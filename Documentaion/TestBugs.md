@@ -98,14 +98,66 @@ Track bugs discovered during debugging. Strikethrough once fixed.
 - **Tested:** CONFIRMED WORKING — clean output on mt7601u
 - **Status:** FIXED
 
+### ~~BUG-009: Scan refresh rate sluggishness & JSON queue starvation~~
+- **Command:** `/scan` (REPL)
+- **Error:** Refresh rate and channel hopping did not update in real-time.
+- **File:** `sidewinder/core/scanner.py`, `swcli/repl/commands/scan.py`
+- **Cause:** 
+  1. `airodump-ng` is called with `--update 0.1` but uses `strtol()` in C which parses floats as `0` and sets update interval to 100,000 seconds (disabling UI/CSV updates, but writing JSON to FIFO on every packet).
+  2. Python's main thread spun in a tight loop with `await asyncio.sleep(0)`, starving the async queue consumer and background reader threads.
+  3. Reading and parsing every packet's JSON dump created high CPU overhead.
+- **Fix:**
+  - Omitted `--update` when `< 1` to fall back to `airodump-ng`'s native 100ms refresh cycle.
+  - Used `collections.deque(maxlen=1)` in Python to efficiently drop intermediate updates and only parse the absolute latest state.
+  - Replaced `await asyncio.sleep(0)` with `await asyncio.sleep(poll_ms / 1000.0)` in the UI render loop to allow GIL sharing.
+  - Dynamically set the `Live` screen refresh FPS: `refresh_fps = max(1, int(1000 / poll_ms))` to align UI with polling.
+- **Status:** FIXED
+
+### ~~BUG-010: Unawaited `detect_adapter` coroutine warning~~
+- **Command:** Launching/exiting `/scan` (REPL)
+- **Error:** `RuntimeWarning: coroutine 'detect_adapter' was never awaited`
+- **File:** `swcli/repl/commands/scan.py:177`
+- **Cause:** `detect_adapter` is an async function but was called synchronously as `chip = detect_adapter(iface_name)`.
+- **Fix:** Changed to `chip = await detect_adapter(iface_name)`.
+- **Status:** FIXED
+
+### ~~BUG-011: All (2.4+5GHz) band selection shows 5GHz channel prompt~~
+- **Command:** `/scan` (REPL) -> All (2.4+5GHz)
+- **Error:** Prompts user to select 5GHz UNII channels.
+- **File:** `swcli/repl/commands/scan.py:202`
+- **Cause:** Condition was `"5GHz" in band_val`, which evaluated to `True` for `"All (2.4+5GHz)"`.
+- **Fix:** Replaced with exact equality check `band_val == "5GHz (a)"` and added `band_val == "All (2.4+5GHz)"` handling.
+### ~~BUG-012: Power -1 (unknown) networks sorted at top and not evicted correctly~~
+- **Command:** `/scan` (REPL)
+- **Error:** Networks with unknown signal (`-1`) were sorted at the very top of the scan results and never evicted during capacity limits.
+- **File:** `swcli/repl/commands/scan.py:123`, `sidewinder/core/scanner.py:197,234`
+- **Cause:** Python sorts negative integers in ascending order, meaning `-1` was evaluated as a stronger signal than actual RSSI values (e.g. `-50` to `-90`). Thus, unknown networks hovered at the top of the UI and avoided being identified as the `weakest` for limit eviction.
+- **Fix:** Used a sorting lambda that maps `-1` to `-999` to ensure unknown signal networks are sorted at the bottom and evicted first.
+- **Status:** FIXED
+
+### ~~BUG-013: Scan table duplicate printing / header wrapping misalignment~~
+- **Command:** `/scan` (REPL)
+- **Error:** When the terminal size is narrow or when rows are added, Rich's `Live(screen=False)` cursor repositioning calculations get corrupted, leaving residual headers and tables printed repeatedly below the current view.
+- **File:** `swcli/repl/commands/scan.py:293`
+- **Cause:** Carriage return (`\r`) and cursor-up movement escape sequences get misaligned when wide table headers/rows wrap onto multiple physical lines or when the table size increases dynamically.
+- **Fix:** Switched `Live` to use the alternate screen buffer (`screen=True`) to perform flicker-free, isolated rendering. Added code to render and print the final, complete scan table onto the normal console scrollback *after* the live view terminates, so the scan results remain visible in standard scrollback history.
+- **Status:** FIXED
+
+### ~~BUG-014: Scapy PcapReader raises Scapy_Exception: No data could be read!~~
+- **Command:** `/capture deauth` (REPL)
+- **Error:** `UNEXPECTED ERROR: Scapy_Exception: No data could be read!`
+- **File:** `sidewinder/core/capture.py:197`
+- **Cause:** When the capture command initializes, `PcapReader` is instantiated immediately on the new cap file. If `airodump-ng` has not yet flushed the initial 24-byte PCAP header to disk, Scapy fails to parse the empty/short file and raises a `Scapy_Exception`.
+- **Fix:** Delayed `PcapReader` instantiation in `poll_eapol` until the PCAP file has grown to at least 24 bytes (the minimal PCAP file header size) and wrapped initialization in a try/except retry block inside the polling loop.
+- **Status:** FIXED
+
 ---
 
 ## Features Added
 
-### FEAT-001: Configurable scan timing rates
+### FEAT-001: Configurable scan timing and refresh rates
 - **File:** `sidewinder/core/scanner.py`, `swcli/repl/commands/scan.py`
-- **Change:** `ScanEngine.scan()` now accepts `update_secs`, `hop_ms`, `write_interval_secs`, `poll_ms` params. Passed through to airodump-ng as `--update`, `-f`, `--write-interval`. REPL `/scan` prompts for each rate with defaults.
-- **Tested:** CONFIRMED — fast (100ms poll) vs slow (500ms poll) both work
+- **Change:** Renamed `Timing preset` prompt to `Refresh rate` and mapped custom input properties (`update_secs`, `hop_ms`, `poll_ms`) to dynamically configure both the `airodump-ng` channel hopping frequency and the Rich `Live` screen render FPS.
 - **Status:** DONE
 
 ### FEAT-002: Memory management
@@ -129,11 +181,10 @@ Track bugs discovered during debugging. Strikethrough once fixed.
 ### FEAT-003: Scan UX simplification
 - **File:** `swcli/repl/commands/scan.py`, `sidewinder/core/scanner.py`
 - **Changes:**
-  - Replaced 4 individual timing prompts with a single "Scan Speed" preset choice: Fast (default), Balanced, Slow, Custom. Custom mode still shows all 4 prompts for power users.
-  - Added smart CSV wait: polls for CSV file with data (>100 bytes) before starting the main scan loop, instead of fixed sleep. Handles airodump-ng's 4-5s initialization delay.
-  - Added "Waiting for airodump-ng to initialize" status message so user knows scan is starting.
+  - Replaced 4 individual timing prompts with a single "Scan Speed" preset choice (renamed to "Refresh rate"): Fast (default), Balanced, Slow, Custom. Custom mode still shows prompts for power users.
+  - Implemented a 3.5s initialization countdown warm-up message when starting a scan to inform the user about the dump startup delay.
   - Scan completion now shows elapsed time, network count, and memory eviction stats.
-- **Tested:** CONFIRMED — first network appears ~5s after scan start (airodump-ng init time)
+- **Tested:** CONFIRMED — countdown prints, clearing screen only when warm-up completes
 - **Status:** DONE
 
 ### FEAT-004: `/monitor status` command
@@ -150,6 +201,30 @@ Track bugs discovered during debugging. Strikethrough once fixed.
   - Implemented deep packet parsing in C: WiFi 6 (HE) capabilities, per-station EAPOL, AssocReq, ProbeReq, and Deauth counters, dynamic WPS state, data/s, and OUI manufacturers.
   - Updated SWCLI Rich UI tables to show `HE`, `Data/s`, and `EAPOL/Assoc` live.
 - **Tested:** CONFIRMED — JSON correctly parsed by Python backend and updates UI instantly.
+### FEAT-006: Interactive keyboard shortcuts & unassociated probes
+- **File:** `swcli/repl/commands/scan.py`, `sidewinder/core/scanner.py`
+- **Changes:**
+  - Removed BSSID broadcast filter to allow processing and tracking of unassociated probing clients.
+  - Rendered unassociated client entries with BSSID displayed as `(not associated)` and empty ESSID.
+  - Removed interactive key commands mimicking `airodump-ng` (`o`, `p`, `s`, `i`, `space`, `a`, `tab`, arrow keys) to ensure zero input latency or terminal lockups.
+- **Status:** DONE
+
+### FEAT-007: Interactive target & adapter selection for Deauth commands
+- **File:** `swcli/repl/commands/capture.py`, `swcli/repl/commands/attack.py`
+- **Changes:**
+  - Implemented automatic monitor interface discovery & prompt choice interface for selection.
+  - Implemented interactive BSSID (AP) selection listing active scanned networks from the session, with manual fallback.
+  - Implemented client station target selection listing clients associated with the targeted AP, with manual and broadcast (`FF:FF:FF:FF:FF:FF`) choices.
+  - Added custom prompt option to specify the number of deauth packets to send.
+  - Shared this logic across both `/capture deauth` and `/attack deauth`, fixing a crash bug in `/attack deauth` caused by a missing `output_prefix` argument.
+- **Status:** DONE
+
+### FEAT-008: Real-time progress feedback during handshake capture
+- **File:** `swcli/repl/commands/capture.py`
+- **Changes:**
+  - Added real-time progress printing callback `on_progress` to both `/capture passive` and `/capture deauth`.
+  - The UI now shows the live status (e.g. `WAITING`, `PARTIAL`, `FULL`) and indicates exactly which handshake messages (`M1`, `M2`, `M3`, `M4`) have been captured so far.
+  - Added user interrupt handling (`Ctrl+C`) to cleanly abort passive and active capture processes instead of hanging/freezing.
 - **Status:** DONE
 
 ---

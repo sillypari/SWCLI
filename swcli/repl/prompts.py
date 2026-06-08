@@ -19,6 +19,8 @@ def read_key() -> str:
             if ch2 == b'P': return 'down'
             if ch2 == b'M': return 'right'
             if ch2 == b'K': return 'left'
+            if ch2 == b'I': return 'page_up'
+            if ch2 == b'Q': return 'page_down'
         if ch == b'\x1b': return 'esc'
         if ch == b'\r': return '\n'
         return ch.decode('utf-8', errors='ignore')
@@ -36,6 +38,12 @@ def read_key() -> str:
                     if ch3 == 'B': return 'down'
                     if ch3 == 'C': return 'right'
                     if ch3 == 'D': return 'left'
+                    if ch3 == '5':
+                        sys.stdin.read(1)
+                        return 'page_up'
+                    if ch3 == '6':
+                        sys.stdin.read(1)
+                        return 'page_down'
                 return 'esc'
             if ch == '\r': return '\n'
             return ch
@@ -56,6 +64,91 @@ def read_line(prompt: str, default: str = "") -> str:
     if not user_input and default:
         return default
     return user_input
+
+
+def _ansi_style(text: str, style: str) -> str:
+    styles = {
+        "cyan": "\033[96m",
+        "green": "\033[92m",
+        "yellow": "\033[93m",
+        "red": "\033[91m",
+        "dim": "\033[90m",
+        "bold": "\033[1m",
+        "reset": "\033[0m",
+    }
+    return f"{styles.get(style, '')}{text}{styles['reset']}"
+
+
+def _highlight_command(text: str, known_commands: set[str]) -> str:
+    if not text:
+        return ""
+
+    lowered = text.strip().lower()
+    if lowered in ("quit", "exit", "/quit", "/ quit"):
+        return _ansi_style(text, "yellow")
+    if text.startswith("!"):
+        return _ansi_style(text, "red")
+    if text.startswith("?"):
+        return _ansi_style(text, "green")
+    if text.startswith("/"):
+        normalized = "/" + text[1:].strip()
+        for cmd in sorted(known_commands, key=len, reverse=True):
+            if normalized == cmd or normalized.startswith(cmd + " "):
+                suffix = text[len(cmd):] if text.startswith(cmd) else ""
+                return _ansi_style(text[:len(text) - len(suffix)], "cyan") + suffix
+        return _ansi_style(text, "cyan")
+    return text
+
+
+def read_command_line(prompt: str, history: list[str], known_commands: set[str]) -> str:
+    """Read a command with lightweight syntax highlighting and history."""
+    buffer = ""
+    history_index = len(history)
+    line_prompt = prompt.lstrip("\n")
+    leading_newlines = prompt[:len(prompt) - len(line_prompt)]
+    if leading_newlines:
+        sys.stdout.write(leading_newlines)
+        sys.stdout.flush()
+
+    def render() -> None:
+        highlighted = _highlight_command(buffer, known_commands)
+        sys.stdout.write(f"\r\033[K{line_prompt}{highlighted}")
+        sys.stdout.flush()
+
+    render()
+    while True:
+        key = read_key()
+        if key == "\n":
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            value = buffer.strip()
+            if value and (not history or history[-1] != value):
+                history.append(value)
+                del history[:-200]
+            return value
+        if key == "\x03":
+            raise KeyboardInterrupt
+        if key == "\x04":
+            raise EOFError
+        if key in ("\x08", "\x7f"):
+            buffer = buffer[:-1]
+        elif key == "up":
+            if history and history_index > 0:
+                history_index -= 1
+                buffer = history[history_index]
+        elif key == "down":
+            if history and history_index < len(history) - 1:
+                history_index += 1
+                buffer = history[history_index]
+            else:
+                history_index = len(history)
+                buffer = ""
+        elif key == "esc":
+            buffer = ""
+        elif len(key) == 1 and key.isprintable():
+            buffer += key
+            history_index = len(history)
+        render()
 
 class PromptResult:
     def __init__(self, value: Any, cancelled: bool = False):
@@ -90,15 +183,20 @@ def prompt_choice(
     message: str,
     choices: list[str],
     default: int = 0,
+    allow_back: bool = True,
 ) -> PromptResult:
     while True:
         console.print(f"\n  [bold]{message}[/bold]")
+        if allow_back:
+            console.print("      0. Back")
         for i, choice in enumerate(choices, 1):
             marker = "→" if i - 1 == default else " "
             console.print(f"    {marker} {i}. {choice}")
         
         try:
             user_input = read_line(f"\n  Select", str(default + 1))
+            if allow_back and user_input.lower() in ("0", "b", "back", "esc", "q", "quit", "cancel"):
+                return PromptResult(None, cancelled=True)
             
             try:
                 index = int(user_input) - 1
@@ -112,7 +210,8 @@ def prompt_choice(
             if 0 <= index < len(choices):
                 return PromptResult(choices[index])
             
-            console.print(f"  [red]Invalid choice. Enter 1-{len(choices)}.[/red]")
+            low = 0 if allow_back else 1
+            console.print(f"  [red]Invalid choice. Enter {low}-{len(choices)}.[/red]")
         
         except KeyboardInterrupt:
             return PromptResult(None, cancelled=True)

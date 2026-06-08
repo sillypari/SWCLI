@@ -1,4 +1,5 @@
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -12,3 +13,30 @@ venv/
 *.log
 .DS_Store
 Thumbs.db
+
+# Local reference source trees used for research only
+Refrence Tools/
+Reference Tools/
+
+# Local runtime and capture artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.cap
+*.pcap
+*.pcapng
+*.hccapx
+*.hc22000
+*.hash
+*.csv
+*.netxml
+*.kismet.csv
+*.kismet.netxml
+*.log.csv
+
+# SWCLI local output directories
+captures/
+results/
+wordlists/

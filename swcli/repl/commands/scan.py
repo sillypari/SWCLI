@@ -1,15 +1,12 @@
 import asyncio
 import os
-import sys
-import select
 import time
-import tty
-import termios
-import threading
 from rich.live import Live
 from rich.table import Table
 from rich.console import Group
 from rich.text import Text
+from rich.panel import Panel
+from rich import box
 from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_text, prompt_confirm, prompt_choice
 from swcli.repl.session_ui import auto_fill_prompt
@@ -29,40 +26,7 @@ A_CHANNELS = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124,
 ABG_CHANNELS = BG_CHANNELS + A_CHANNELS
 
 
-class _KeyReader:
-    """Background thread that reads keypresses from stdin in raw mode."""
 
-    def __init__(self):
-        self._last_key = ""
-        self._lock = threading.Lock()
-        self._running = False
-        self._old_settings = None
-
-    def start(self):
-        self._old_settings = termios.tcgetattr(sys.stdin)
-        tty.setraw(sys.stdin.fileno())
-        self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def _loop(self):
-        while self._running:
-            r, _, _ = select.select([sys.stdin], [], [], 0.1)
-            if r:
-                ch = sys.stdin.read(1)
-                with self._lock:
-                    self._last_key = ch
-
-    def get_key(self):
-        with self._lock:
-            k = self._last_key
-            self._last_key = ""
-            return k
-
-    def stop(self):
-        self._running = False
-        if self._old_settings:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
 
 
 def _resolve_essid(engine, bssid):
@@ -79,7 +43,127 @@ def _get_channel_choices(band):
     return ABG_CHANNELS, "All"
 
 
-def _build_scan_display(engine, elapsed, band, show_probes_only=False):
+
+def _signal_style(signal):
+    if signal == -1:
+        return "dim"
+    if signal >= -50:
+        return "bold bright_green"
+    if signal >= -65:
+        return "green"
+    if signal >= -78:
+        return "yellow"
+    return "red"
+
+
+def _fmt_signal(signal):
+    if signal == -1:
+        return Text("UNK", style="dim")
+    return Text(f"{signal:>4}", style=_signal_style(signal))
+
+
+def _fmt_plain_signal(signal):
+    if signal == -1:
+        return "[dim]UNK[/dim]"
+    style = _signal_style(signal)
+    return f"[{style}]{signal}[/{style}]"
+
+
+def _sec_style(value):
+    v = (value or "").upper()
+    if "WPA3" in v:
+        return "bold bright_green"
+    if "WPA2" in v:
+        return "green"
+    if "WPA" in v:
+        return "yellow"
+    if "OPN" in v or "OPEN" in v:
+        return "bold red"
+    return "white"
+
+
+def _fmt_security(privacy, cipher, auth):
+    privacy = privacy or "-"
+    cipher = cipher or "-"
+    auth = auth or "-"
+    text = Text()
+    text.append(privacy, style=_sec_style(privacy))
+    text.append(f" / {cipher} / {auth}", style="dim")
+    return text
+
+
+def _fmt_privacy(privacy):
+    privacy = privacy or "-"
+    return Text(privacy, style=_sec_style(privacy))
+
+
+def _fmt_ap_identity(network):
+    text = Text()
+    text.append(network.display_name(), style="bold white")
+    text.append(f"\n{network.bssid}", style="cyan")
+    return text
+
+
+def _fmt_int(value, unknown="-"):
+    return str(value) if value not in (None, -1) else unknown
+
+
+def _fmt_flags(*, wps=False, he=False, eapol=False):
+    flags = Text()
+    items = []
+    if eapol:
+        items.append(("EAPOL", "bold red"))
+    if wps:
+        items.append(("WPS", "yellow"))
+    if he:
+        items.append(("HE", "cyan"))
+    if not items:
+        flags.append("--", style="dim")
+        return flags
+    for idx, (label, style) in enumerate(items):
+        if idx:
+            flags.append(" ")
+        flags.append(label, style=style)
+    return flags
+
+
+def _network_client_counts(clients):
+    counts = {}
+    eapol = set()
+    for client in clients:
+        bssid = client.bssid.upper()
+        counts[bssid] = counts.get(bssid, 0) + 1
+        if client.eapol:
+            eapol.add(bssid)
+    return counts, eapol
+
+
+def _fmt_client_bssid(client, engine):
+    text = Text()
+    if client.bssid.upper() == "FF:FF:FF:FF:FF:FF":
+        text.append("(not associated)", style="dim")
+    else:
+        essid = _resolve_essid(engine, client.bssid)
+        text.append(client.bssid, style="cyan")
+        text.append(f"  {essid}", style="dim")
+    if client.probe:
+        text.append(f"\nprobe: {client.probe}", style="yellow")
+    return text
+
+
+def _fmt_client_ap(client):
+    if client.bssid.upper() == "FF:FF:FF:FF:FF:FF":
+        return Text("(not associated)", style="dim")
+    return Text(client.bssid, style="cyan")
+
+
+def _fmt_client_essid(client, engine):
+    if client.bssid.upper() == "FF:FF:FF:FF:FF:FF":
+        return Text("-", style="dim")
+    return Text(_resolve_essid(engine, client.bssid), style="dim")
+
+
+def _build_scan_display(engine, elapsed, band, color_enabled=True, max_networks=18, max_clients=12):
     now_str = time.strftime("%Y-%m-%d %H:%M:%S")
 
     if engine.current_channel > 0:
@@ -94,79 +178,136 @@ def _build_scan_display(engine, elapsed, band, show_probes_only=False):
 
     nets_count = len(engine.networks)
     clis_count = len(engine.clients)
-    filter_tag = " [PROBES]" if show_probes_only else " [P]robe"
-    header = Text(
-        f" CH {ch_str} ][ Elapsed: {int(elapsed)} s ][ {now_str} "
-        f"][ {nets_count} networks, {clis_count} clients ]{filter_tag}",
-        style="bold cyan",
+    sorted_nets = sorted(
+        engine.networks.values(),
+        key=lambda x: x.signal if x.signal != -1 else -999,
+        reverse=True,
     )
+    sorted_clients = sorted(engine.clients.values(), key=lambda x: x.packets, reverse=True)
+    client_counts, eapol_bssids = _network_client_counts(sorted_clients)
+    handshake_count = sum(1 for n in sorted_nets if n.eapol or n.bssid.upper() in eapol_bssids)
+    active_count = sum(1 for n in sorted_nets if n.data_packets > 0 or client_counts.get(n.bssid.upper(), 0) > 0)
+
+    summary = Table.grid(expand=True)
+    summary.add_column()
+    left = Text()
+    left.append("SWCLI Live Scan", style="bold white")
+    left.append(f"  {now_str}", style="dim")
+    left.append("  CH ", style="dim")
+    left.append(ch_str, style="bold cyan")
+    left.append("  BAND ", style="dim")
+    left.append(band or "custom", style="bold white")
+    left.append("  TIME ", style="dim")
+    left.append(f"{int(elapsed):>4}s", style="bold white")
+    left.append("\n")
+    left.append(f"iface activity: {nets_count} APs / {clis_count} clients", style="cyan")
+    left.append(f"  active: {active_count}", style="green" if active_count else "dim")
+    left.append(f"  handshakes: {handshake_count}", style="bold red" if handshake_count else "dim")
+    summary.add_row(left)
+    header = Panel(summary, border_style="bright_blue", box=box.ROUNDED, padding=(0, 1))
 
     ap_table = Table(
-        show_header=True, header_style="bold",
-        box=None, padding=(0, 2),
+        show_header=True,
+        header_style="bold bright_cyan" if color_enabled else "none",
+        border_style="bright_black",
+        box=box.SIMPLE_HEAVY,
+        padding=(0, 0),
+        pad_edge=False,
+        collapse_padding=True,
         show_edge=False,
+        expand=False,
     )
-    ap_table.add_column("ESSID")
-    ap_table.add_column("BSSID", style="bold")
-    ap_table.add_column("PWR", justify="right")
-    ap_table.add_column("Beacons", justify="right")
-    ap_table.add_column("#Data", justify="right")
-    ap_table.add_column("#/s", justify="right")
-    ap_table.add_column("CH", justify="right")
-    ap_table.add_column("MB", justify="right")
-    ap_table.add_column("HE", style="green")
-    ap_table.add_column("ENC")
-    ap_table.add_column("CIPHER")
-    ap_table.add_column("AUTH")
-    ap_table.add_column("EAPOL", style="red")
+    ap_table.add_column("#", justify="right", style="dim", width=3)
+    ap_table.add_column("ESSID", ratio=3, min_width=12, overflow="fold")
+    ap_table.add_column("BSSID", style="cyan", width=17, no_wrap=True)
+    ap_table.add_column("PWR", justify="right", width=5)
+    ap_table.add_column("Beacons", justify="right", width=7)
+    ap_table.add_column("#Data", justify="right", width=6)
+    ap_table.add_column("#/s", justify="right", width=4)
+    ap_table.add_column("CH", justify="right", width=4)
+    ap_table.add_column("MB", justify="right", width=4)
+    ap_table.add_column("HE", justify="center", width=4)
+    ap_table.add_column("ENC", justify="center", width=6)
+    ap_table.add_column("CIPHER", justify="center", width=7)
+    ap_table.add_column("AUTH", justify="center", width=6)
+    ap_table.add_column("CL", justify="right", width=3)
+    ap_table.add_column("FLAGS", justify="center", width=6)
 
-    for n in sorted(engine.networks.values(), key=lambda x: x.signal, reverse=True):
+    hidden_nets = max(0, len(sorted_nets) - max_networks)
+    for idx, n in enumerate(sorted_nets[:max_networks], 1):
+        clients_for_ap = client_counts.get(n.bssid.upper(), 0)
         ap_table.add_row(
+            str(idx),
             n.display_name(),
             n.bssid,
-            str(n.signal) if n.signal != -1 else "UKNWN",
+            _fmt_signal(n.signal),
             str(n.beacons),
             str(n.data_packets),
             str(n.data_per_sec),
             str(n.channel),
-            str(n.speed),
-            "Yes" if n.he else "-",
-            n.privacy,
-            n.cipher,
-            n.auth,
-            "Yes" if n.eapol else "-",
+            _fmt_int(n.speed),
+            "YES" if n.he else "--",
+            _fmt_privacy(n.privacy),
+            n.cipher or "-",
+            n.auth or "-",
+            str(clients_for_ap),
+            _fmt_flags(wps=n.wps, eapol=(n.eapol or n.bssid.upper() in eapol_bssids)),
         )
 
     cli_table = Table(
-        show_header=True, header_style="bold",
-        box=None, padding=(0, 2),
+        show_header=True,
+        header_style="bold bright_magenta" if color_enabled else "none",
+        border_style="bright_black",
+        box=box.SIMPLE_HEAVY,
+        padding=(0, 0),
+        pad_edge=False,
+        collapse_padding=True,
         show_edge=False,
+        expand=False,
     )
-    cli_table.add_column("ESSID")
-    cli_table.add_column("BSSID", style="bold")
-    cli_table.add_column("STATION", style="bold")
-    cli_table.add_column("PWR", justify="right")
-    cli_table.add_column("Packets", justify="right")
-    cli_table.add_column("EAPOL", style="red")
-    cli_table.add_column("Probes")
+    cli_table.add_column("#", justify="right", style="dim", width=3)
+    cli_table.add_column("ESSID", ratio=2, min_width=12, overflow="fold")
+    cli_table.add_column("STATION", style="magenta" if color_enabled else "none", width=17, no_wrap=True)
+    cli_table.add_column("BSSID", style="cyan" if color_enabled else "none", width=17, no_wrap=True)
+    cli_table.add_column("PWR", justify="right", width=5)
+    cli_table.add_column("PKTS", justify="right", width=5)
+    cli_table.add_column("PROBE", ratio=2, min_width=12, overflow="fold")
+    cli_table.add_column("HE", justify="center", width=4)
+    cli_table.add_column("FLAGS", justify="center", width=6)
 
-    clients = engine.clients.values()
-    if show_probes_only:
-        clients = [c for c in clients if c.probe]
-
-    for c in sorted(clients, key=lambda x: x.packets, reverse=True):
-        essid = _resolve_essid(engine, c.bssid)
+    hidden_clients = max(0, len(sorted_clients) - max_clients)
+    for idx, c in enumerate(sorted_clients[:max_clients], 1):
         cli_table.add_row(
-            essid,
-            c.bssid,
+            str(idx),
+            _fmt_client_essid(c, engine),
             c.mac,
-            str(c.signal) if c.signal != -1 else "UKNWN",
+            _fmt_client_ap(c),
+            _fmt_signal(c.signal),
             str(c.packets),
-            "Yes" if c.eapol else "-",
-            c.probe or "",
+            c.probe or "-",
+            "YES" if c.he else "--",
+            _fmt_flags(eapol=c.eapol),
         )
 
-    return Group(header, ap_table, Text(""), cli_table)
+    footer = Text(style="dim" if color_enabled else "none")
+    recent = engine.get_recent_counts() if hasattr(engine, "get_recent_counts") else {"networks": 0, "clients": 0}
+    if recent["networks"] or recent["clients"]:
+        footer.append(
+            f"\n Recently seen but not in the current frame: "
+            f"{recent['networks']} APs / {recent['clients']} clients."
+        )
+    if hidden_nets or hidden_clients:
+        footer.append(f"\n Showing top {min(len(sorted_nets), max_networks)} APs")
+        if hidden_nets:
+            footer.append(f" ({hidden_nets} more hidden)")
+        footer.append(f" and top {min(len(sorted_clients), max_clients)} clients")
+        if hidden_clients:
+            footer.append(f" ({hidden_clients} more hidden)")
+        footer.append(". Run /scan results for the full table.")
+    footer.append("\n Press Ctrl+C to stop and keep results. Use /target after scan to choose an AP.\n")
+
+    return Group(header, Text(""), ap_table, Text(""), cli_table, footer)
+
 
 
 async def cmd_scan(repl):
@@ -174,8 +315,8 @@ async def cmd_scan(repl):
     for iface_name in list_interfaces():
         mode = get_interface_mode(iface_name)
         if mode == "monitor":
-            chip = detect_adapter(iface_name)
-            chip_str = f" ({chip})" if chip else ""
+            chip = await detect_adapter(iface_name)
+            chip_str = f" ({chip.chipset})" if (chip and chip.chipset) else ""
             monitor_ifaces.append((iface_name, chip_str))
 
     if not monitor_ifaces:
@@ -199,7 +340,7 @@ async def cmd_scan(repl):
 
     band_val = band_res.value
     channels = None
-    if "2.4GHz" in band_val:
+    if band_val == "2.4GHz (bg)":
         band = "bg"
         preset_res = prompt_choice("Channel preset:", ["All 2.4GHz", "1, 6, 11 (non-overlapping)", "Custom"])
         if preset_res.cancelled: return
@@ -209,7 +350,7 @@ async def cmd_scan(repl):
             ch_str = prompt_text("Enter channels (comma-separated)", default="1,6,11")
             if ch_str.cancelled: return
             channels = [int(c.strip()) for c in ch_str.value.split(",") if c.strip().isdigit()]
-    elif "5GHz" in band_val:
+    elif band_val == "5GHz (a)":
         band = "a"
         preset_res = prompt_choice("Channel preset:", ["All 5GHz", "UNII-1 (36-48)", "UNII-2 (52-64)", "UNII-3 (100-144)", "UNII-4 (149-165)", "Custom"])
         if preset_res.cancelled: return
@@ -222,18 +363,16 @@ async def cmd_scan(repl):
             ch_str = prompt_text("Enter channels (comma-separated)", default="36,40,44,48")
             if ch_str.cancelled: return
             channels = [int(c.strip()) for c in ch_str.value.split(",") if c.strip().isdigit()]
-    else:
+    elif band_val == "All (2.4+5GHz)":
+        band = "abg"
+        channels = None
+    else:  # "Custom channels"
         band = ""
-        preset_res = prompt_choice("Channel preset:", ["All channels", "1, 6, 11", "Custom"])
-        if preset_res.cancelled: return
-        if "1, 6, 11" in preset_res.value:
-            channels = [1, 6, 11]
-        elif "Custom" in preset_res.value:
-            ch_str = prompt_text("Enter channels (comma-separated)", default="1,6,11,36,40,44,48")
-            if ch_str.cancelled: return
-            channels = [int(c.strip()) for c in ch_str.value.split(",") if c.strip().isdigit()]
+        ch_str = prompt_text("Enter channels (comma-separated)", default="1,6,11,36,40,44,48")
+        if ch_str.cancelled: return
+        channels = [int(c.strip()) for c in ch_str.value.split(",") if c.strip().isdigit()]
 
-    timing_res = prompt_choice("Timing preset:", list(TIMING_PRESETS.keys()) + ["Custom"])
+    timing_res = prompt_choice("Refresh rate:", list(TIMING_PRESETS.keys()) + ["Custom"])
     if timing_res.cancelled:
         return
 
@@ -247,7 +386,7 @@ async def cmd_scan(repl):
         if hop_res.cancelled: return
         hop_ms = int(hop_res.value) if hop_res.value else 250
         write_interval_secs = 0
-        poll_ms = 100
+        poll_ms = max(10, int(update_secs * 1000))
     else:
         update_secs, hop_ms, write_interval_secs, poll_ms = TIMING_PRESETS[preset_name]
 
@@ -279,27 +418,24 @@ async def cmd_scan(repl):
         on_init=on_init,
     ))
 
-    await asyncio.sleep(3.5)
+    repl.print("  [dim]Initializing scan engine, warm-up in progress...[/dim]")
+    for i in range(2, 0, -1):
+        repl.print(f"  [dim]Launching live dump screen in {i}s...[/dim]")
+        await asyncio.sleep(1.0)
+    await asyncio.sleep(0.5)
     console.clear()
 
-    key_reader = _KeyReader()
-    key_reader.start()
-
-    show_probes_only = False
     try:
-        with Live(console=console, refresh_per_second=10, screen=False) as live:
+        refresh_fps = max(1, int(1000 / poll_ms))
+        with Live(console=console, refresh_per_second=refresh_fps, screen=True, vertical_overflow="crop") as live:
             while engine._running:
                 elapsed = time.time() - start_time
-                display = _build_scan_display(engine, elapsed, band, show_probes_only)
-                live.update(display)
-                key = key_reader.get_key()
-                if key and key.lower() == 'p':
-                    show_probes_only = not show_probes_only
-                await asyncio.sleep(0)
+                display = _build_scan_display(engine, elapsed, band)
+                live.update(display, refresh=True)
+                await asyncio.sleep(poll_ms / 1000.0)
     except KeyboardInterrupt:
         pass
     finally:
-        key_reader.stop()
         engine.stop()
         try:
             await scan_task
@@ -310,6 +446,11 @@ async def cmd_scan(repl):
         elapsed = time.time() - start_time
         nets = engine.get_networks()
         clients = engine.get_clients()
+
+        # Render final display onto normal scrollback buffer
+        final_display = _build_scan_display(engine, elapsed, band)
+        console.print(final_display)
+
         cap_file = "/tmp/swcli_scan-01.cap"
         repl.session.scan_results = nets
         repl.session.clients = clients
@@ -322,91 +463,120 @@ async def cmd_scan(repl):
         repl.print("  Run /scan results to view them in a table.")
 
 
+
 async def cmd_scan_results(repl):
     nets = repl.session.scan_results
     if not nets:
         repl.print("  [yellow]No scan results in session. Run /scan first.[/yellow]")
         return
 
-    headers = ["#", "ESSID", "BSSID", "CH", "PWR", "ENC", "CIPHER", "AUTH", "WPS", "EAPOL"]
-    rows = []
+    clients = repl.session.clients
+    client_counts, eapol_bssids = _network_client_counts(clients)
+    active_count = sum(1 for n in nets if n.data_packets > 0 or client_counts.get(n.bssid.upper(), 0) > 0)
+    handshake_count = sum(1 for n in nets if n.eapol or n.bssid.upper() in eapol_bssids)
+
+    summary = Table.grid(expand=True)
+    summary.add_column(ratio=2)
+    summary.add_column(justify="right")
+    left = Text()
+    left.append("Last scan results", style="bold white")
+    left.append(f"\n{len(nets)} APs / {len(clients)} clients", style="cyan")
+    left.append(f"  active: {active_count}", style="green" if active_count else "dim")
+    left.append(f"  handshakes: {handshake_count}", style="bold red" if handshake_count else "dim")
+    right = Text("Use /target to select an AP", style="dim")
+    summary.add_row(left, right)
+    console.print(Panel(summary, border_style="bright_blue", box=box.ROUNDED, padding=(0, 1)))
+
+    ap_table = Table(
+        title="Access Points",
+        title_style="bold cyan",
+        show_header=True,
+        header_style="bold bright_cyan",
+        border_style="bright_black",
+        box=box.SIMPLE_HEAVY,
+        padding=(0, 0),
+        pad_edge=False,
+        collapse_padding=True,
+        expand=False,
+    )
+    ap_table.add_column("#", justify="right", style="dim", width=3)
+    ap_table.add_column("ESSID", ratio=3, min_width=12, overflow="fold")
+    ap_table.add_column("BSSID", style="cyan", width=17, no_wrap=True)
+    ap_table.add_column("PWR", justify="right", width=5)
+    ap_table.add_column("Beacons", justify="right", width=7)
+    ap_table.add_column("#Data", justify="right", width=6)
+    ap_table.add_column("#/s", justify="right", width=4)
+    ap_table.add_column("CH", justify="right", width=4)
+    ap_table.add_column("MB", justify="right", width=4)
+    ap_table.add_column("HE", justify="center", width=4)
+    ap_table.add_column("ENC", justify="center", width=6)
+    ap_table.add_column("CIPHER", justify="center", width=7)
+    ap_table.add_column("AUTH", justify="center", width=6)
+    ap_table.add_column("CL", justify="right", width=3)
+    ap_table.add_column("FLAGS", justify="center", width=6)
+
     for i, n in enumerate(nets, 1):
-        rows.append([
+        ap_table.add_row(
             str(i),
             n.display_name(),
             n.bssid,
+            _fmt_signal(n.signal),
+            str(n.beacons),
+            str(n.data_packets),
+            str(n.data_per_sec),
             str(n.channel),
-            str(n.signal) if n.signal != -1 else "UKNWN",
-            n.privacy,
-            n.cipher,
-            n.auth,
-            "Yes" if n.wps else "No",
-            "Yes" if n.eapol else "-",
-        ])
-    print_table(headers, rows, "Scan Results")
+            _fmt_int(n.speed),
+            "YES" if n.he else "--",
+            _fmt_privacy(n.privacy),
+            n.cipher or "-",
+            n.auth or "-",
+            str(client_counts.get(n.bssid.upper(), 0)),
+            _fmt_flags(wps=n.wps, eapol=(n.eapol or n.bssid.upper() in eapol_bssids)),
+        )
+    console.print(ap_table)
+    repl.print("  [dim]Use /target to set the active AP. Commands still ask for confirmation before capture or attack.[/dim]")
 
-    clients = repl.session.clients
     if clients:
-        cli_headers = ["ESSID", "STATION", "BSSID", "PWR", "Packets", "EAPOL", "Probes"]
-        cli_rows = []
-        for c in clients:
-            essid = "[UNKNOWN]"
-            for n in nets:
-                if n.bssid == c.bssid:
-                    essid = n.display_name()
-                    break
-            cli_rows.append([
-                essid,
+        cli_table = Table(
+            title="Clients",
+            title_style="bold magenta",
+            show_header=True,
+            header_style="bold bright_magenta",
+            border_style="bright_black",
+            box=box.SIMPLE_HEAVY,
+            padding=(0, 0),
+            pad_edge=False,
+            collapse_padding=True,
+            expand=False,
+        )
+        cli_table.add_column("#", justify="right", style="dim", width=3)
+        cli_table.add_column("ESSID", ratio=2, min_width=12, overflow="fold")
+        cli_table.add_column("STATION", style="magenta", width=17, no_wrap=True)
+        cli_table.add_column("BSSID", style="cyan", width=17, no_wrap=True)
+        cli_table.add_column("PWR", justify="right", width=5)
+        cli_table.add_column("PKTS", justify="right", width=5)
+        cli_table.add_column("PROBE", ratio=2, min_width=12, overflow="fold")
+        cli_table.add_column("HE", justify="center", width=4)
+        cli_table.add_column("FLAGS", justify="center", width=6)
+
+        engine_like = type("ScanResultView", (), {"networks": {n.bssid: n for n in nets}})()
+        for i, c in enumerate(clients, 1):
+            cli_table.add_row(
+                str(i),
+                _fmt_client_essid(c, engine_like),
                 c.mac,
-                c.bssid,
-                str(c.signal) if c.signal != -1 else "UKNWN",
+                _fmt_client_ap(c),
+                _fmt_signal(c.signal),
                 str(c.packets),
-                "Yes" if c.eapol else "-",
-                c.probe or "",
-            ])
-        print_table(cli_headers, cli_rows, "Clients")
-
-
-async def cmd_scan_handshakes(repl):
-    clients = repl.session.clients
-    cap_file = repl.session.last_cap_file
-    if not clients:
-        repl.print("  [yellow]No scan results. Run /scan first.[/yellow]")
-        return
-
-    eapol_clients = [c for c in clients if c.eapol]
-    repl.print(f"\n  [bold]Handshake Status[/bold]")
-    repl.print(f"  Capture file: [cyan]{cap_file}[/cyan]" if cap_file else "  [dim]No capture file[/dim]")
-    repl.print(f"  EAPOL frames detected: [red]{len(eapol_clients)}[/red] clients\n")
-
-    if not eapol_clients:
-        repl.print("  [dim]No EAPOL handshakes observed in this scan.[/dim]")
-        repl.print("  [dim]Tip: run /scan for longer on busy networks to capture handshakes.[/dim]")
-        return
-
-    nets = repl.session.scan_results
-    essid_map = {n.bssid: n.display_name() for n in nets}
-
-    headers = ["ESSID", "Station", "BSSID", "PWR", "Packets"]
-    rows = []
-    for c in eapol_clients:
-        rows.append([
-            essid_map.get(c.bssid, c.bssid),
-            c.mac,
-            c.bssid,
-            str(c.signal) if c.signal != -1 else "UKNWN",
-            str(c.packets),
-        ])
-    print_table(headers, rows, "EAPOL Handshakes")
-
-    if cap_file and os.path.exists(cap_file):
-        size = os.path.getsize(cap_file)
-        repl.print(f"\n  [dim]Cap file size: {size:,} bytes -- usable for handshake cracking.[/dim]")
-    else:
-        repl.print(f"\n  [yellow]Capture file not found at {cap_file}[/yellow]")
+                c.probe or "-",
+                "YES" if c.he else "--",
+                _fmt_flags(eapol=c.eapol),
+            )
+        console.print(cli_table)
 
 
 def register_commands(palette: CommandPalette):
     palette.register(Command("/scan", "Start WiFi scan", "Scan", cmd_scan, requires_iface=True))
     palette.register(Command("/scan results", "Show last scan", "Scan", cmd_scan_results, requires_root=False))
-    palette.register(Command("/scan handshakes", "Show EAPOL handshake status", "Scan", cmd_scan_handshakes, requires_root=False))
+    from swcli.repl.commands.capture import cmd_handshake
+    palette.register(Command("/scan handshakes", "Show M1-M4 key-info bits", "Scan", cmd_handshake, requires_root=False))

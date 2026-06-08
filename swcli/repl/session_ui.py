@@ -1,6 +1,15 @@
+import json
 import os
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from sidewinder.core.session import Session
+
+AUTOSAVE_DIR = os.path.expanduser("~/.sidewinder/autosaves")
+MAX_AUTOSAVES = 5
+
 
 class UISession:
     """Stores UI state for auto-filling prompts."""
@@ -13,9 +22,13 @@ class UISession:
         self.last_cap_file: str = ""
         self.scan_results = []
         self.clients = []
+        self.selected_target = None
+        self.selected_client: str = ""
         self.captures: list[str] = []
         self.monitor_mode: bool = False
         self.monitor_iface: str = ""
+        self.handshake = None
+        self.cracked_passwords = []
     
     def get_channel_for_bssid(self, bssid: str) -> Optional[int]:
         bssid_upper = bssid.upper()
@@ -36,6 +49,52 @@ class UISession:
             if os.path.exists(self.last_cap_file):
                 return self.last_cap_file
         return ""
+
+    def to_core_session(self) -> Session:
+        return Session(
+            adapter=self.last_iface,
+            scan_results=self.scan_results,
+            clients=self.clients,
+            selected_target=self.selected_target,
+            last_capture=self.last_cap_file,
+            captures=self.captures,
+            handshake=self.handshake,
+            cracked_passwords=self.cracked_passwords,
+        )
+
+
+def autosave_session(session: UISession, reason: str = "state_changed") -> str:
+    """Write a rotating autosave. Keeps only the newest MAX_AUTOSAVES files."""
+    os.makedirs(AUTOSAVE_DIR, exist_ok=True)
+    core = session.to_core_session()
+    core.log("autosave", reason=reason)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    path = os.path.join(AUTOSAVE_DIR, f"autosave-{stamp}.json")
+    with open(path, "w") as f:
+        json.dump(asdict(core), f, indent=2, default=str)
+
+    autosaves = sorted(
+        Path(AUTOSAVE_DIR).glob("autosave-*.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    for old in autosaves[MAX_AUTOSAVES:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return path
+
+
+def list_autosaves() -> list[Path]:
+    if not os.path.isdir(AUTOSAVE_DIR):
+        return []
+    return sorted(
+        Path(AUTOSAVE_DIR).glob("autosave-*.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )[:MAX_AUTOSAVES]
+
 
 def auto_fill_prompt(session: UISession, prompt_type: str, message: str) -> tuple[str, str]:
     """Auto-fill a prompt with the last known value. Returns (message, default)."""

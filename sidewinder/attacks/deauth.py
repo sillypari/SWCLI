@@ -104,7 +104,7 @@ async def run_deauth(
     # Extract chipset from interface sysfs (simplified — real impl uses adapter detection)
     try:
         from ..core.adapter import detect_adapter
-        info = detect_adapter(iface)
+        info = await detect_adapter(iface)
         chipset = info.chipset if info else "UNKNOWN"
     except Exception:
         chipset = "UNKNOWN"

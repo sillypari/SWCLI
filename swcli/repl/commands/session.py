@@ -5,20 +5,30 @@ from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_text, prompt_confirm
 from sidewinder.core.session import Session, Network, Client
 from swcli.repl.renderer import print_success, print_error, print_table
+from swcli.repl.session_ui import list_autosaves
 
 SESSION_DIR = os.path.expanduser("~/.sidewinder/sessions")
+
+def _apply_session(repl, session: Session):
+    repl.session.scan_results = session.scan_results
+    repl.session.clients = session.clients
+    repl.session.selected_target = session.selected_target
+    repl.session.last_iface = session.adapter
+    repl.session.last_cap_file = session.last_capture
+    repl.session.captures = session.captures
+    repl.session.handshake = session.handshake
+    repl.session.cracked_passwords = session.cracked_passwords
+    if session.selected_target:
+        repl.session.last_bssid = session.selected_target.bssid
+        repl.session.last_channel = session.selected_target.channel
+    if session.captures:
+        repl.session.last_cap_file = session.captures[-1]
 
 async def cmd_session_save(repl):
     path = prompt_text("Save path", default=os.path.expanduser("~/.sidewinder/session.json"))
     if path.cancelled: return
 
-    session = Session(
-        adapter=repl.session.last_iface,
-        scan_results=repl.session.scan_results,
-        clients=repl.session.clients,
-        last_capture=repl.session.last_cap_file,
-        captures=repl.session.captures,
-    )
+    session = repl.session.to_core_session()
 
     try:
         saved_path = session.save(path.value)
@@ -48,17 +58,7 @@ async def cmd_session_load(repl):
             print_error("Failed to load session — file may be corrupt.")
             return
 
-        repl.session.scan_results = session.scan_results
-        repl.session.clients = session.clients
-        repl.session.last_iface = session.adapter
-        repl.session.last_cap_file = session.last_capture
-        repl.session.captures = session.captures
-        if session.selected_target:
-            repl.session.last_bssid = session.selected_target.bssid
-            repl.session.last_channel = session.selected_target.channel
-        if session.captures:
-            repl.session.last_cap_file = session.captures[-1]
-
+        _apply_session(repl, session)
         print_success(f"Session loaded: {session.id[:8]}... ({len(session.scan_results)} networks)")
     except Exception as e:
         print_error(f"Failed to load: {e}")
@@ -89,7 +89,45 @@ async def cmd_session_list(repl):
 
     print_table(["#", "ID", "Size", "Saved"], rows, "Saved Sessions")
 
+
+async def cmd_session_autosaves(repl):
+    autosaves = list_autosaves()
+    if not autosaves:
+        repl.print("[yellow]No autosaved sessions found.[/yellow]")
+        return
+
+    rows = []
+    for i, path in enumerate(autosaves, 1):
+        stat = path.stat()
+        from datetime import datetime
+        ts = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        rows.append([str(i), path.name, f"{stat.st_size:,} bytes", ts])
+    print_table(["#", "Autosave", "Size", "Saved"], rows, "Last 5 Autosaves")
+
+
+async def cmd_session_load_autosave(repl):
+    autosaves = list_autosaves()
+    if not autosaves:
+        repl.print("[yellow]No autosaved sessions found.[/yellow]")
+        return
+
+    from swcli.repl.prompts import prompt_choice
+    choices = [f"{path.name} ({path.stat().st_size:,} bytes)" for path in autosaves]
+    choice_map = {label: path for label, path in zip(choices, autosaves)}
+    res = prompt_choice("Load autosave", choices)
+    if res.cancelled:
+        return
+
+    session = Session.load(str(choice_map[res.value]))
+    if not session:
+        print_error("Failed to load autosave — file may be corrupt.")
+        return
+    _apply_session(repl, session)
+    print_success(f"Autosave loaded: {choice_map[res.value].name} ({len(session.scan_results)} networks)")
+
 def register_commands(palette: CommandPalette):
     palette.register(Command("/session save", "Save current state", "Session", cmd_session_save, requires_root=False))
     palette.register(Command("/session load", "Load saved session", "Session", cmd_session_load, requires_root=False))
     palette.register(Command("/session list", "List saved sessions", "Session", cmd_session_list, requires_root=False))
+    palette.register(Command("/session autosaves", "List last 5 autosaves", "Session", cmd_session_autosaves, requires_root=False))
+    palette.register(Command("/session load autosave", "Load an autosaved session", "Session", cmd_session_load_autosave, requires_root=False))

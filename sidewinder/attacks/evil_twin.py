@@ -96,24 +96,32 @@ class EvilTwinEngine:
         if target_bssid:
             await safe_log(f"[*] Cloning BSSID: {target_bssid}")
                 
-        self._proc = await self.mgr.start_background(cmd)
+        self._proc = await self.mgr.start_background(cmd, capture_output=True)
         self._running = True
 
-        async def _read_stdout():
+        async def _read_output():
             try:
-                assert self._proc and self._proc.stdout
-                async for line_b in self._proc.stdout:
-                    if not self._running:
-                        break
-                    line = line_b.decode(errors="replace").rstrip()
-                    if not line:
-                        continue
-                    await safe_log(line)
+                assert self._proc
+
+                async def read_pipe(pipe):
+                    if pipe is None:
+                        return
+                    async for line_b in pipe:
+                        if not self._running:
+                            break
+                        line = line_b.decode(errors="replace").rstrip()
+                        if line:
+                            await safe_log(line)
+
+                await asyncio.gather(
+                    read_pipe(self._proc.stdout),
+                    read_pipe(self._proc.stderr),
+                )
             except Exception as e:
                 logger.error("Evil twin output error: %s", e)
                 await safe_log(f"[!] Rogue AP error: {e}")
 
-        self._read_task = asyncio.create_task(_read_stdout())
+        self._read_task = asyncio.create_task(_read_output())
         
         try:
             await asyncio.wait_for(self._proc.wait(), timeout=timeout)

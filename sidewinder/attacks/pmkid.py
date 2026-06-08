@@ -5,7 +5,7 @@ Implements clientless WPA/WPA2 handshake capture using hcxdumptool.
 import asyncio
 import logging
 import os
-from typing import Any, Tuple
+from typing import Any, Optional
 
 from ..core.attack import BaseAttackEngine, AttackConfig, AttackResult, AttackState
 from ..core.subprocess_mgr import SubprocessManager
@@ -19,7 +19,7 @@ class PMKIDEngine(BaseAttackEngine):
     def __init__(self, mgr: SubprocessManager) -> None:
         super().__init__()
         self.mgr = mgr
-        self._proc_id: str = ""
+        self._proc: Optional[asyncio.subprocess.Process] = None
 
     async def start(self, config: AttackConfig, **kwargs: Any) -> AttackResult:
         """Launch hcxdumptool to capture PMKID."""
@@ -54,7 +54,7 @@ class PMKIDEngine(BaseAttackEngine):
             logger.info("Starting PMKID attack on %s (BSSID: %s)", iface, config.target_bssid)
             await self._emit_progress(status="Starting hcxdumptool...")
 
-            self._proc_id = await self.mgr.start_background(cmd)
+            self._proc = await self.mgr.start_background(cmd)
 
             # Wait for timeout
             try:
@@ -72,12 +72,16 @@ class PMKIDEngine(BaseAttackEngine):
             hash_file = capture_file.replace(".pcapng", ".hc22000")
             await self._emit_progress(status="Converting capture to hashcat format...")
 
-            conv_result = await self.mgr.run(["hcxpcapngtool", "-o", hash_file, capture_file])
+            conv_result = await self.mgr.run(
+                ["hcxpcapngtool", "-o", hash_file, capture_file],
+                check=False,
+            )
 
             success = os.path.exists(hash_file) and os.path.getsize(hash_file) > 0
 
             return AttackResult(
                 success=success,
+                errors=[] if success else [conv_result.stderr or "No PMKID hash produced."],
                 stats={"hash_file": hash_file if success else None}
             )
         finally:
@@ -86,7 +90,7 @@ class PMKIDEngine(BaseAttackEngine):
 
     async def stop(self) -> None:
         """Stop the attack."""
-        if self._proc_id:
-            await self.mgr.kill_background(self._proc_id)
-            self._proc_id = ""
+        if self._proc:
+            await self.mgr.kill_background(self._proc)
+            self._proc = None
         self.state = AttackState.COMPLETED

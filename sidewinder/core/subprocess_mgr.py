@@ -142,6 +142,18 @@ class SubprocessManager:
             env=env,
         )
         self._active_procs.append(proc)
+        stderr_tail: list[str] = []
+
+        async def drain_stderr() -> None:
+            if proc.stderr is None:
+                return
+            async for line_b in proc.stderr:
+                line = line_b.decode(errors="replace").rstrip()
+                if line:
+                    stderr_tail.append(line)
+                    del stderr_tail[:-100]
+
+        stderr_task = asyncio.create_task(drain_stderr())
         try:
             assert proc.stdout is not None
             async for line_b in proc.stdout:
@@ -151,11 +163,25 @@ class SubprocessManager:
                 self._active_procs.remove(proc)
             await self._kill_proc(proc)
             await proc.wait()
+            try:
+                await asyncio.wait_for(stderr_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                stderr_task.cancel()
+
+            stderr_text = "\n".join(stderr_tail).strip()
+                
+            if proc.returncode is not None and proc.returncode not in (0, -9, -15):
+                logger.error("Command stream failed (rc=%d): %s\n%s", proc.returncode, " ".join(cmd), stderr_text)
+                if stderr_text:
+                    raise RuntimeError(f"Command failed (exit {proc.returncode}): {stderr_text}")
+                else:
+                    raise RuntimeError(f"Command failed with exit code {proc.returncode}")
 
     async def start_background(
         self,
         cmd: list[str],
         env: Optional[dict] = None,
+        capture_output: bool = False,
     ) -> asyncio.subprocess.Process:
         """Start a process in the background.
 
@@ -165,6 +191,7 @@ class SubprocessManager:
         Args:
             cmd: Command + args as a list.
             env: Optional environment variables for the child process.
+            capture_output: If True, keep stdout/stderr as pipes for caller-managed reading.
 
         Returns:
             The asyncio.subprocess.Process object for later control.
@@ -172,8 +199,8 @@ class SubprocessManager:
         logger.debug("Starting background: %s", " ".join(cmd))
         proc = await asyncio.create_subprocess_exec(
             *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE if capture_output else asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE if capture_output else asyncio.subprocess.DEVNULL,
             start_new_session=True,
             env=env,
         )
