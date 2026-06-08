@@ -17,12 +17,11 @@ try:
     from sidewinder.core.services import get_service_manager
     from sidewinder.core.capture import capture_passive, capture_deauth, validate_handshake
     from sidewinder.core.cracker import crack_aircrack, crack_hashcat, find_wordlists
-    from sidewinder.core.intelligence import IntelligenceEngine
     from sidewinder.core.cleanup import get_cleanup_manager
     from sidewinder.core.session import Session
     from sidewinder.core.config import SidewinderConfig
     from sidewinder.core.errors import SidewinderError
-    from sidewinder.attacks.deauth import run_deauth, DeauthConfig
+    from sidewinder.core.paths import scan_prefix, capture_prefix, output_root
     from sidewinder.attacks.evil_twin import EvilTwinEngine
     from sidewinder.attacks.wps import WPSEngine
     from sidewinder.attacks.pmkid import PMKIDEngine
@@ -268,7 +267,7 @@ async def handle_scan(args):
     try:
         await engine.scan(
             mon_iface=args.mon,
-            capture_prefix="/tmp/sidewinder_scan",
+            capture_prefix=scan_prefix(),
             band=args.band,
             channels=channels,
             on_network=on_network,
@@ -317,7 +316,7 @@ async def handle_capture(args):
             mon_iface=args.mon,
             bssid=args.bssid,
             channel=args.ch,
-            output_prefix=args.output,
+            output_prefix=args.output or capture_prefix("passive"),
             timeout=args.timeout
         )
         if res:
@@ -343,12 +342,12 @@ async def handle_capture(args):
             bssid=args.bssid,
             client=args.client,
             channel=args.ch,
-            output_prefix=args.output,
+            output_prefix=args.output or capture_prefix("deauth"),
             count=args.count,
             timeout=args.timeout
         )
-        if res and res.handshake:
-            print_success(f"Capture finished. Status: {res.handshake.status}")
+        if res:
+            print_success(f"Capture finished. Status: {res.status}")
         else:
             print_error("Deauth attack failed to capture handshake.")
             
@@ -479,16 +478,19 @@ async def handle_cleanup(args):
             print_info("Dry run: showing files that would be deleted")
             await mgr.cleanup_files(dry_run=True)
         else:
-            if confirm_action("Delete temp files (/tmp/sidewinder_*)?"):
-                await mgr.cleanup_files(dry_run=False)
-                print_success("Temp files deleted.")
+            root = output_root()
+            if confirm_action(f"Delete generated files under {root}?"):
+                if os.path.isdir(root):
+                    shutil.rmtree(root)
+                os.makedirs(root, exist_ok=True)
+                print_success("Generated files deleted.")
     else:
         # Full cleanup
         print("Full cleanup will:")
         print("  1. Kill attack processes")
         print("  2. Exit monitor mode")
         print("  3. Restore NetworkManager, wpa_supplicant")
-        print("  4. Delete /tmp/sidewinder_* temp files")
+        print(f"  4. Delete generated files under {output_root()}")
         if not confirm_action("\nRun full cleanup?"): return
         
         await mgr.full_cleanup("", "", "")
@@ -592,7 +594,7 @@ def main():
     c_pass.add_argument("mon")
     c_pass.add_argument("bssid")
     c_pass.add_argument("ch", type=int)
-    c_pass.add_argument("--output", default="/tmp/sidewinder_cap")
+    c_pass.add_argument("--output", default="")
     c_pass.add_argument("--timeout", type=int, default=300)
     
     c_deauth = c_subs.add_parser("deauth", help="Deauth capture")
@@ -600,7 +602,7 @@ def main():
     c_deauth.add_argument("bssid")
     c_deauth.add_argument("ch", type=int)
     c_deauth.add_argument("--client", default="FF:FF:FF:FF:FF:FF")
-    c_deauth.add_argument("--output", default="/tmp/sidewinder_cap")
+    c_deauth.add_argument("--output", default="")
     c_deauth.add_argument("--count", type=int, default=10)
     c_deauth.add_argument("--bursts", type=int, default=3)
     c_deauth.add_argument("--timeout", type=int, default=300)

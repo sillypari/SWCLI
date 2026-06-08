@@ -6,6 +6,8 @@ from swcli.repl.session_ui import auto_fill_prompt
 from sidewinder.attacks.evil_twin import EvilTwinEngine
 from sidewinder.attacks.wps import WPSEngine
 from sidewinder.core.attack import AttackConfig
+from sidewinder.core.capture import capture_deauth
+from sidewinder.core.paths import attack_prefix
 from sidewinder.core.subprocess_mgr import get_manager
 from rich.live import Live
 from rich.console import Group
@@ -293,7 +295,6 @@ async def cmd_deauth(repl):
     conf = prompt_confirm("Start Deauth Attack?")
     if conf.cancelled or not conf.value: return
     
-    from sidewinder.core.capture import capture_deauth
     repl.print("\n  [cyan]Sending Deauth frames...[/cyan]")
     start = time.monotonic()
     state = {"m1": False, "m2": False, "m3": False, "m4": False, "status": "sending", "activity": "|", "analysis_passes": 0}
@@ -333,7 +334,7 @@ async def cmd_deauth(repl):
                 bssid=bssid,
                 client=client,
                 channel=channel,
-                output_prefix="/tmp/swcli_attack_deauth",
+                output_prefix=attack_prefix("deauth"),
                 count=count,
                 timeout=10,
                 on_progress=on_progress,

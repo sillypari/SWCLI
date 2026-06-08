@@ -1,20 +1,16 @@
-"""Sidewinder Scan Engine.
+"""Sidewinder scan engine.
 
-Runs airodump-ng and parses its CSV output in real-time.
-Extracts networks (APs) and clients using a line-by-line state machine.
-
-Memory management:
-  - Max 500 networks (evicts weakest signal when full)
-  - Max 1000 clients (evicts oldest last_seen when full)
-  - Stale eviction: removes entries not seen for >120s
-  - Dedup callbacks: only fires on first seen or changed data
-  - Reuses parser across poll cycles (no alloc per cycle)
+Runs airodump-ng with a JSON FIFO, keeps the latest live AP/client frame in
+memory, and preserves recently observed context for UI state that must survive
+short-lived airodump updates.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import threading
 import time
 from typing import Callable, Optional
 
@@ -23,14 +19,9 @@ from .subprocess_mgr import SubprocessManager, get_manager
 
 logger = logging.getLogger(__name__)
 
-# --- Memory limits ---
 MAX_NETWORKS = 500
 MAX_CLIENTS = 1000
-STALE_TIMEOUT_SECS = 120  # remove entries not seen for this long
-
-
-import json
-import threading
+STALE_TIMEOUT_SECS = 120
 
 class ScanEngine:
     """Run airodump-ng and emit discovered networks and clients in real-time via JSON FIFO."""
@@ -40,9 +31,11 @@ class ScanEngine:
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._running = False
 
+        self.networks: dict[str, Network] = {}
         self.clients: dict[str, Client] = {}
         self.recent_networks: dict[str, float] = {}
         self.recent_clients: dict[str, float] = {}
+        self.eapol_bssids: set[str] = set()
         self._data_rate_prev: dict[str, tuple[int, float]] = {}
         self.current_channel: int = 0
 
@@ -50,7 +43,7 @@ class ScanEngine:
     async def scan(
         self,
         mon_iface: str,
-        capture_prefix: str = "/tmp/sidewinder_scan",
+        capture_prefix: str = "./swcli-output/scans/scan",
         band: str = "",
         channels: list[int] | None = None,
         update_secs: float = 0.1,
@@ -162,6 +155,13 @@ class ScanEngine:
                 if n.bssid == "ff:ff:ff:ff:ff:ff" or n.channel < 1:
                     continue
                 existing = self.networks.get(n.bssid)
+                if n.eapol:
+                    self.eapol_bssids.add(n.bssid.upper())
+                elif existing and existing.eapol:
+                    n.eapol = True
+                    self.eapol_bssids.add(n.bssid.upper())
+                elif n.bssid.upper() in self.eapol_bssids:
+                    n.eapol = True
                 self.networks[n.bssid] = n
                 self.recent_networks[n.bssid] = now
                 seen_nets.add(n.bssid)
@@ -173,11 +173,22 @@ class ScanEngine:
                 if c.bssid == "ff:ff:ff:ff:ff:ff":
                     continue
                 existing = self.clients.get(c.mac)
+                if c.eapol:
+                    self.eapol_bssids.add(c.bssid.upper())
+                elif existing and existing.eapol:
+                    c.eapol = True
+                    self.eapol_bssids.add(c.bssid.upper())
                 self.clients[c.mac] = c
                 self.recent_clients[c.mac] = now
                 seen_clients.add(c.mac)
                 if on_client and (not existing or c.signal != existing.signal or c.packets != existing.packets):
                     on_client(c)
+
+            for bssid in self.eapol_bssids:
+                for net in self.networks.values():
+                    if net.bssid.upper() == bssid:
+                        net.eapol = True
+                        break
 
             # Immediate purge: remove entries not in this update
             gone_nets = [b for b in self.networks if b not in seen_nets]
@@ -220,7 +231,7 @@ class ScanEngine:
         }
 
 
-    def _enforce_limits(self):
+    def _enforce_limits(self) -> None:
         if len(self.networks) > MAX_NETWORKS:
             weakest = min(self.networks, key=lambda b: self.networks[b].signal if self.networks[b].signal != -1 else -999)
             del self.networks[weakest]
@@ -270,7 +281,7 @@ class ScanEngine:
             clients = [c for c in clients if c.bssid == bssid.upper()]
         return clients
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, int]:
         """Return memory management statistics."""
         return {
             "networks": len(self.networks),

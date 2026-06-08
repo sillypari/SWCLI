@@ -1,6 +1,5 @@
 from enum import Enum
 from typing import Optional, Callable
-import traceback
 
 class ErrorLevel(Enum):
     INFO = "info"           # Just informational

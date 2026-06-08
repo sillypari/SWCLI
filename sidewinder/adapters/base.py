@@ -6,8 +6,6 @@ Each adapter card (RT5370, RTL8821AU, MT7902) implements this.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Optional
 
 
 # Performance settings matrix per card per operation

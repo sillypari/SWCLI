@@ -32,8 +32,12 @@ class CrackProgress:
     total_keys: int = 0
     keys_per_second: float = 0.0
     eta_seconds: float = 0.0
+    eta_text: str = ""
     current_key: str = ""
     percent: float = 0.0
+    master_key: str = ""
+    transient_key: str = ""
+    eapol_hmac: str = ""
 
     def eta_display(self) -> str:
         """Human-readable ETA."""
@@ -75,15 +79,47 @@ def find_wordlists() -> list[str]:
 def _parse_aircrack_line(line: str) -> Optional[CrackProgress]:
     """Parse one line of aircrack-ng output into a CrackProgress update."""
     progress = CrackProgress()
-    # Keys per second: e.g. "1234 keys tested (5678.90 k/s)"
-    keys_match = re.search(r'(\d+)\s+keys\s+tested', line)
+    has_update = False
+
+    # Progress: "[00:00:02] 23328/14344158 keys tested (10723.30 k/s)"
+    keys_match = re.search(r'(\d+)(?:/(\d+))?\s+keys\s+tested', line)
     if keys_match:
         progress.keys_tested = int(keys_match.group(1))
-    # Speed: e.g. "(5678.90 k/s)"
-    speed_match = re.search(r'\(([\d.]+)\s+k/s\)', line)
+        if keys_match.group(2):
+            progress.total_keys = int(keys_match.group(2))
+        has_update = True
+
+    speed_match = re.search(r'\(([\d.]+)\s*([kMGT]?)\/s\)', line, re.IGNORECASE)
     if speed_match:
-        progress.keys_per_second = float(speed_match.group(1)) * 1000
-    return progress if progress.keys_tested > 0 else None
+        raw = float(speed_match.group(1))
+        unit = speed_match.group(2).lower()
+        multiplier = {"k": 1000, "m": 1_000_000, "g": 1_000_000_000, "t": 1_000_000_000_000}.get(unit, 1)
+        progress.keys_per_second = raw * multiplier
+        has_update = True
+
+    time_left = re.search(r'Time\s+left:\s*(.*?)(?:\s+([\d.]+)%\s*)?$', line, re.IGNORECASE)
+    if time_left:
+        progress.eta_text = time_left.group(1).strip()
+        if time_left.group(2):
+            progress.percent = float(time_left.group(2))
+        has_update = True
+
+    current = re.search(r'Current\s+passphrase:\s*(.+)$', line, re.IGNORECASE)
+    if current:
+        progress.current_key = current.group(1).strip()
+        has_update = True
+
+    field_map = {
+        "master key": "master_key",
+        "transient key": "transient_key",
+        "eapol hmac": "eapol_hmac",
+    }
+    field = re.search(r'^\s*(Master Key|Transient Key|EAPOL HMAC)\s*:\s*(.+)$', line, re.IGNORECASE)
+    if field:
+        setattr(progress, field_map[field.group(1).lower()], field.group(2).strip())
+        has_update = True
+
+    return progress if has_update else None
 
 
 def _parse_hashcat_line(line: str) -> Optional[CrackProgress]:

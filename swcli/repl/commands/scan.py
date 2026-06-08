@@ -9,10 +9,11 @@ from rich.panel import Panel
 from rich import box
 from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_text, prompt_confirm, prompt_choice
-from swcli.repl.session_ui import auto_fill_prompt
 from sidewinder.core.scanner import ScanEngine
+from sidewinder.core.capture import validate_handshake
+from sidewinder.core.paths import scan_prefix
 from sidewinder.core.adapter import list_interfaces, get_interface_mode, detect_adapter
-from swcli.repl.renderer import print_table, console
+from swcli.repl.renderer import console
 
 # Timing presets: (update_secs, hop_ms, write_interval_secs, poll_ms)
 TIMING_PRESETS = {
@@ -35,15 +36,6 @@ def _resolve_essid(engine, bssid):
     return "[UNKNOWN]"
 
 
-def _get_channel_choices(band):
-    if band == "a":
-        return A_CHANNELS, "5GHz"
-    elif band == "bg":
-        return BG_CHANNELS, "2.4GHz"
-    return ABG_CHANNELS, "All"
-
-
-
 def _signal_style(signal):
     if signal == -1:
         return "dim"
@@ -62,13 +54,6 @@ def _fmt_signal(signal):
     return Text(f"{signal:>4}", style=_signal_style(signal))
 
 
-def _fmt_plain_signal(signal):
-    if signal == -1:
-        return "[dim]UNK[/dim]"
-    style = _signal_style(signal)
-    return f"[{style}]{signal}[/{style}]"
-
-
 def _sec_style(value):
     v = (value or "").upper()
     if "WPA3" in v:
@@ -82,26 +67,9 @@ def _sec_style(value):
     return "white"
 
 
-def _fmt_security(privacy, cipher, auth):
-    privacy = privacy or "-"
-    cipher = cipher or "-"
-    auth = auth or "-"
-    text = Text()
-    text.append(privacy, style=_sec_style(privacy))
-    text.append(f" / {cipher} / {auth}", style="dim")
-    return text
-
-
 def _fmt_privacy(privacy):
     privacy = privacy or "-"
     return Text(privacy, style=_sec_style(privacy))
-
-
-def _fmt_ap_identity(network):
-    text = Text()
-    text.append(network.display_name(), style="bold white")
-    text.append(f"\n{network.bssid}", style="cyan")
-    return text
 
 
 def _fmt_int(value, unknown="-"):
@@ -136,19 +104,6 @@ def _network_client_counts(clients):
         if client.eapol:
             eapol.add(bssid)
     return counts, eapol
-
-
-def _fmt_client_bssid(client, engine):
-    text = Text()
-    if client.bssid.upper() == "FF:FF:FF:FF:FF:FF":
-        text.append("(not associated)", style="dim")
-    else:
-        essid = _resolve_essid(engine, client.bssid)
-        text.append(client.bssid, style="cyan")
-        text.append(f"  {essid}", style="dim")
-    if client.probe:
-        text.append(f"\nprobe: {client.probe}", style="yellow")
-    return text
 
 
 def _fmt_client_ap(client):
@@ -407,8 +362,10 @@ async def cmd_scan(repl):
                 repl.print(f"  [dim]Starting scan... ({remaining}s)[/dim]")
                 init_printed = True
 
+    capture_prefix = scan_prefix()
     scan_task = asyncio.create_task(engine.scan(
         mon_iface=iface,
+        capture_prefix=capture_prefix,
         band=band,
         channels=channels,
         update_secs=update_secs,
@@ -451,15 +408,20 @@ async def cmd_scan(repl):
         final_display = _build_scan_display(engine, elapsed, band)
         console.print(final_display)
 
-        cap_file = "/tmp/swcli_scan-01.cap"
+        cap_file = f"{capture_prefix}-01.cap"
         repl.session.scan_results = nets
         repl.session.clients = clients
         repl.session.last_iface = iface
         repl.session.last_cap_file = cap_file
         if cap_file not in repl.session.captures:
             repl.session.captures.append(cap_file)
+        handshake = validate_handshake(cap_file) if os.path.exists(cap_file) else None
+        if handshake and handshake.eapol_count:
+            repl.session.handshake = handshake
         repl.print(f"\n  [green]Scan complete.[/green] Found {len(nets)} networks, {len(clients)} clients in {elapsed:.0f}s.")
         repl.print(f"  [dim]Capture saved: {cap_file}[/dim]")
+        if handshake and handshake.eapol_count:
+            repl.print(f"  [green]EAPOL detected:[/green] {handshake.status.upper()} ({handshake.eapol_count} frames). Run /handshake.")
         repl.print("  Run /scan results to view them in a table.")
 
 

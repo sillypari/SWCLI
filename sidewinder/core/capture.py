@@ -18,6 +18,7 @@ EAPOL validation uses proper IEEE 802.11-2020 Table 12-6 key_info bitmasks.
 from __future__ import annotations
 
 import asyncio
+import glob
 import hashlib
 import logging
 import os
@@ -171,31 +172,40 @@ def extract_handshake_messages(cap_file: str) -> list[dict[str, str]]:
         return []
 
     messages: dict[str, dict[str, str]] = {}
+    packet_offset = 0
     try:
-        with PcapReader(cap_file) as reader:
-            for index, pkt in enumerate(reader, 1):
-                if not pkt.haslayer(EAPOL):
-                    continue
-                for candidate in _eapol_key_candidates(pkt, EAPOL):
-                    name = _message_name(candidate)
-                    if name == "UNKNOWN" or name in messages:
+        for path in _capture_segments(cap_file):
+            if not os.path.exists(path) or os.path.getsize(path) < 24:
+                continue
+            segment_packets = 0
+            with PcapReader(path) as reader:
+                for index, pkt in enumerate(reader, 1):
+                    segment_packets = index
+                    if not pkt.haslayer(EAPOL):
                         continue
-                    key_info = _key_info_value(candidate)
-                    if key_info is None:
-                        continue
-                    messages[name] = {
-                        "message": name,
-                        "packet": str(index),
-                        "key_info_hex": f"0x{key_info:04x}",
-                        "key_info_binary": f"{key_info:016b}",
-                        "pairwise": "1" if key_info & KEY_INFO_PAIRWISE else "0",
-                        "install": "1" if key_info & KEY_INFO_INSTALL else "0",
-                        "ack": "1" if key_info & KEY_INFO_ACK else "0",
-                        "mic": "1" if key_info & KEY_INFO_MIC else "0",
-                        "secure": "1" if key_info & KEY_INFO_SECURE else "0",
-                    }
-                if len(messages) == 4:
-                    break
+                    for candidate in _eapol_key_candidates(pkt, EAPOL):
+                        name = _message_name(candidate)
+                        if name == "UNKNOWN" or name in messages:
+                            continue
+                        key_info = _key_info_value(candidate)
+                        if key_info is None:
+                            continue
+                        messages[name] = {
+                            "message": name,
+                            "packet": str(packet_offset + index),
+                            "key_info_hex": f"0x{key_info:04x}",
+                            "key_info_binary": f"{key_info:016b}",
+                            "pairwise": "1" if key_info & KEY_INFO_PAIRWISE else "0",
+                            "install": "1" if key_info & KEY_INFO_INSTALL else "0",
+                            "ack": "1" if key_info & KEY_INFO_ACK else "0",
+                            "mic": "1" if key_info & KEY_INFO_MIC else "0",
+                            "secure": "1" if key_info & KEY_INFO_SECURE else "0",
+                        }
+                    if len(messages) == 4:
+                        break
+            packet_offset += segment_packets
+            if len(messages) == 4:
+                break
     except Exception as e:
         logger.debug("Cannot extract handshake messages from %s: %s", cap_file, e)
         return []
@@ -203,13 +213,83 @@ def extract_handshake_messages(cap_file: str) -> list[dict[str, str]]:
     return [messages[name] for name in ("M1", "M2", "M3", "M4") if name in messages]
 
 
+def _capture_segments(first_cap_file: str) -> list[str]:
+    if first_cap_file.endswith("-01.cap"):
+        prefix = first_cap_file[:-7]
+        paths = glob.glob(f"{prefix}-*.cap")
+        return sorted(paths) or [first_cap_file]
+    return [first_cap_file]
+
+
+def _hash_capture_files(paths: list[str]) -> str:
+    sha = hashlib.sha256()
+    for path in paths:
+        try:
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    sha.update(chunk)
+        except OSError:
+            continue
+    return sha.hexdigest()
+
+
+def _validate_handshake_segments(paths: list[str]) -> HandshakeResult:
+    try:
+        from scapy.all import PcapReader  # type: ignore
+        from scapy.layers.eap import EAPOL  # type: ignore
+    except ImportError:
+        logger.error("scapy not installed — run: pip install scapy")
+        return HandshakeResult(status="invalid")
+
+    m1 = m2 = m3 = m4 = False
+    eapol_count = 0
+    readable_paths = []
+
+    for path in paths:
+        if not os.path.exists(path) or os.path.getsize(path) < 24:
+            continue
+        try:
+            with PcapReader(path) as reader:
+                readable_paths.append(path)
+                for pkt in reader:
+                    if not pkt.haslayer(EAPOL):
+                        continue
+                    eapol_count += 1
+                    for eapol_key in _eapol_key_candidates(pkt, EAPOL):
+                        if is_m1(eapol_key):
+                            m1 = True
+                        if is_m2(eapol_key):
+                            m2 = True
+                        if is_m3(eapol_key):
+                            m3 = True
+                        if is_m4(eapol_key):
+                            m4 = True
+        except Exception as e:
+            logger.debug("Cannot read cap segment %s: %s", path, e)
+
+    if m1 and m2 and m3 and m4:
+        status = "full"
+    elif m1 and m2:
+        status = "partial"
+    else:
+        status = "invalid"
+
+    return HandshakeResult(
+        status=status,
+        m1=m1, m2=m2, m3=m3, m4=m4,
+        sha256=_hash_capture_files(readable_paths),
+        eapol_count=eapol_count,
+    )
+
+
 def validate_handshake(cap_file: str) -> HandshakeResult:
     """Validate WPA 4-way handshake in a capture file using scapy.
 
     Uses proper IEEE 802.11-2020 Table 12-6 key_info bitmasks.
-    The previous single-bit approach was wrong:
-      - M3 check in elif chain could never trigger (M3 also has bit 0x0080 like M1)
-      - Must check ALL relevant bits together to distinguish M1/M2/M3/M4.
+    M1-M4 are identified by checking all relevant key-info bits together.
 
     Args:
         cap_file: Path to .cap/.pcap file
@@ -217,54 +297,7 @@ def validate_handshake(cap_file: str) -> HandshakeResult:
     Returns:
         HandshakeResult with m1/m2/m3/m4 flags and status
     """
-    try:
-        from scapy.all import rdpcap  # type: ignore
-        from scapy.layers.eap import EAPOL  # type: ignore
-    except ImportError:
-        logger.error("scapy not installed — run: pip install scapy")
-        return HandshakeResult(status="invalid")
-
-    try:
-        packets = rdpcap(cap_file)
-    except Exception as e:
-        logger.debug("Cannot read cap file %s: %s", cap_file, e)
-        return HandshakeResult(status="invalid")
-
-    eapols = [p for p in packets if p.haslayer(EAPOL)]
-    m1 = m2 = m3 = m4 = False
-
-    for pkt in eapols:
-        for eapol_key in _eapol_key_candidates(pkt, EAPOL):
-            if is_m1(eapol_key):
-                m1 = True
-            if is_m2(eapol_key):
-                m2 = True
-            if is_m3(eapol_key):
-                m3 = True
-            if is_m4(eapol_key):
-                m4 = True
-
-    # Determine capture status
-    if m1 and m2 and m3 and m4:
-        status = "full"
-    elif m1 and m2:
-        status = "partial"  # Usable for offline crack (M1+M2 have nonces + MIC)
-    else:
-        status = "invalid"
-
-    # SHA-256 of capture file
-    try:
-        with open(cap_file, "rb") as f:
-            sha256 = hashlib.sha256(f.read()).hexdigest()
-    except OSError:
-        sha256 = ""
-
-    return HandshakeResult(
-        status=status,
-        m1=m1, m2=m2, m3=m3, m4=m4,
-        sha256=sha256,
-        eapol_count=len(eapols),
-    )
+    return _validate_handshake_segments(_capture_segments(cap_file))
 
 
 async def poll_eapol(
@@ -290,13 +323,6 @@ async def poll_eapol(
     Returns:
         HandshakeResult if found, None on timeout
     """
-    try:
-        from scapy.all import PcapReader
-        from scapy.layers.eap import EAPOL
-    except ImportError:
-        logger.error("scapy not installed — run: pip install scapy")
-        return None
-
     start = time.time()
     logger.info("Polling for EAPOL in %s (timeout=%ds)", pcap_file, int(timeout))
 
@@ -307,71 +333,28 @@ async def poll_eapol(
     if not os.path.exists(pcap_file):
         return None
 
-    m1 = m2 = m3 = m4 = False
-    eapol_count = 0
     status = "waiting"
 
-    f = open(pcap_file, "rb")
-    reader = None
-    try:
-        while time.time() - start < timeout:
-            try:
-                # If file is empty or header is not fully written, PcapReader raises Scapy_Exception
-                if os.path.getsize(pcap_file) < 24:
-                    await asyncio.sleep(poll_interval)
-                    continue
-                
-                if reader is None:
-                    try:
-                        reader = PcapReader(f)
-                    except Exception as e:
-                        # Header might not be completely flushed yet
-                        await asyncio.sleep(poll_interval)
-                        continue
+    last_result = HandshakeResult(status="invalid")
+    while time.time() - start < timeout:
+        result = validate_handshake(pcap_file)
+        last_result = result
+        status = result.status if result.status in ("partial", "full") else "waiting"
 
-                for pkt in reader:
-                    if pkt.haslayer(EAPOL):
-                        eapol_count += 1
-                        for eapol_key in _eapol_key_candidates(pkt, EAPOL):
-                            if is_m1(eapol_key): m1 = True
-                            if is_m2(eapol_key): m2 = True
-                            if is_m3(eapol_key): m3 = True
-                            if is_m4(eapol_key): m4 = True
+        if on_progress:
+            on_progress(result.m1, result.m2, result.m3, result.m4, status)
 
-                if m1 and m2 and m3 and m4:
-                    status = "full"
-                elif m1 and m2:
-                    status = "partial"
+        if result.status == "full":
+            logger.info("Handshake found! M1-M4 captured.")
+            return result
 
-                if on_progress:
-                    on_progress(m1, m2, m3, m4, status)
+        await asyncio.sleep(poll_interval)
 
-                if status == "full":
-                    logger.info("Handshake found! M1-M4 captured.")
-                    break
-                    
-            except EOFError:
-                pass  # Reached end of file, wait for more
-            except Exception as e:
-                logger.debug("Error reading pcap: %s", e)
+    if last_result.status == "partial":
+        return last_result
 
-            await asyncio.sleep(poll_interval)
-            
-        f.seek(0)
-        sha256 = hashlib.sha256(f.read()).hexdigest()
-
-        if status in ("partial", "full"):
-            return HandshakeResult(
-                status=status,
-                m1=m1, m2=m2, m3=m3, m4=m4,
-                sha256=sha256,
-                eapol_count=eapol_count,
-            )
-
-        logger.warning("EAPOL poll timed out after %ds", int(timeout))
-        return None
-    finally:
-        f.close()
+    logger.warning("EAPOL poll timed out after %ds", int(timeout))
+    return None
 
 
 async def capture_passive(
@@ -392,7 +375,7 @@ async def capture_passive(
         mon_iface: Monitor interface
         bssid: Target AP BSSID
         channel: Target channel (must be known before calling — no race condition)
-        output_prefix: Prefix for output files (e.g., "/tmp/sidewinder_cap")
+        output_prefix: Prefix for output files (e.g., "./swcli-output/captures/passive")
         timeout: Max seconds to wait for handshake
         mgr: Optional SubprocessManager instance
     """

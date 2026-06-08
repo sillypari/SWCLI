@@ -19,7 +19,6 @@ from typing import Optional
 
 from ..core.monitor import (
     enter_monitor_mode_bad_driver,
-    exit_monitor_mode,
     set_channel,
 )
 from ..core.subprocess_mgr import run

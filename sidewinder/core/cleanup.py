@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 CLEANUP_PATTERNS = [
     "/tmp/sidewinder_*",
+    "/tmp/swcli_*",
 ]
 
 ATTACK_PROCESSES = [

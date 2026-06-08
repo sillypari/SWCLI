@@ -55,7 +55,7 @@ class DeauthConfig:
     bursts: int = 3
     cooldown: float = 10.0
     timeout: float = 300.0
-    output_prefix: str = "/tmp/sidewinder_cap"
+    output_prefix: str = "./swcli-output/captures/deauth"
 
 
 @dataclass

@@ -2,8 +2,6 @@ from rich.console import Console, Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
-from rich.live import Live
 from rich import box
 from rich.align import Align
 import time
@@ -13,20 +11,6 @@ APP_DEVELOPER = "Parikshit Singh Bais"
 APP_GITHUB = "https://github.com/sillypari"
 
 console = Console(force_terminal=True)
-
-# Color constants
-COLORS = {
-    "primary":    "green",        # Success, active, selected
-    "secondary":  "cyan",         # Info, headers
-    "accent":     "magenta",      # Special actions
-    "error":      "red",          # Errors, danger
-    "warning":    "yellow",       # Warnings
-    "success":    "bright_green", # Passwords found
-    "info":       "blue",         # Informational
-    "muted":      "dim",          # Secondary text
-    "dim":        "dark_gray",    # Dimmed text
-    "text":       "white",        # Primary text
-}
 
 TONE_STYLES = {
     "success": "bold bright_green",
@@ -47,25 +31,6 @@ def badge(label: str, tone: str = "info") -> str:
 def yes_no(value: bool) -> str:
     return badge("YES", "success") if value else badge("NO", "error")
 
-
-def state_text(value: str) -> str:
-    lowered = str(value).lower()
-    if lowered in ("yes", "ok", "active", "full", "found", "success", "running"):
-        return f"[bold bright_green]{value}[/bold bright_green]"
-    if lowered in ("no", "failed", "invalid", "missing", "error", "exhausted"):
-        return f"[bold red]{value}[/bold red]"
-    if lowered in ("partial", "waiting", "inactive", "unknown"):
-        return f"[bold yellow]{value}[/bold yellow]"
-    return str(value)
-
-SW_LOGO = """[bold blue]
-   ███████╗██╗    ██╗[/bold blue][bold white] ██████╗██╗     ██╗[/bold white]
-[bold blue]   ██╔════╝██║    ██║[/bold blue][bold white]██╔════╝██║     ██║[/bold white]
-[bold blue]   ███████╗██║ █╗ ██║[/bold blue][bold white]██║     ██║     ██║[/bold white]
-[bold blue]   ╚════██║██║███╗██║[/bold blue][bold white]██║     ██║     ██║[/bold white]
-[bold blue]   ███████║╚███╔███╔╝[/bold blue][bold white]╚██████╗███████╗██║[/bold white]
-[bold blue]   ╚══════╝ ╚══╝╚══╝ [/bold blue][bold white] ╚═════╝╚══════╝╚═╝[/bold white]
-"""
 
 def print_splash(duration: float = 1.8):
     """Show a short startup splash before the REPL prompt."""
@@ -159,12 +124,6 @@ def print_info(msg: str):
     """Print info message."""
     console.print(f"  {badge('i', 'info')} {msg}")
 
-def print_progress(line: str):
-    """Print progress line (overwrites previous)."""
-    console.file.write(f"\r {line}\x1b[K")
-    console.file.flush()
-
-
 def _mark(value: bool) -> Text:
     return Text("YES" if value else "--", style="green bold" if value else "red")
 
@@ -225,17 +184,6 @@ def build_handshake_progress_panel(
     )
 
 
-_SPEED_UNITS = ((1_000_000_000, "G/s"), (1_000_000, "M/s"), (1_000, "K/s"), (1, "keys/s"))
-
-
-def _format_speed(h_per_sec: float) -> str:
-    for threshold, unit in _SPEED_UNITS:
-        if h_per_sec >= threshold:
-            value = h_per_sec / threshold
-            return f"{value:,.2f} {unit}"
-    return f"{h_per_sec:,.0f} keys/s"
-
-
 def _fmt_hms(total_seconds: float) -> str:
     if total_seconds <= 0:
         return "00:00"
@@ -243,37 +191,6 @@ def _fmt_hms(total_seconds: float) -> str:
     m = int((total_seconds % 3600) // 60)
     s = int(total_seconds % 60)
     return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-
-
-def build_crack_progress_panel(
-    *,
-    title: str,
-    target: str,
-    tested: int,
-    total: int,
-    keys_per_second: float,
-    elapsed: float,
-    eta_seconds: float,
-) -> Panel:
-    t = Text()
-
-    t.append(title + "\n", style="cyan bold")
-    t.append("Target       : ", style="white")
-    t.append(target + "\n", style="yellow")
-    t.append("Keys tested  : ", style="white")
-    t.append(f"{tested:,}\n", style="green")
-    t.append("Speed        : ", style="white")
-    t.append(f"{_format_speed(keys_per_second)}\n", style="magenta")
-    t.append("Elapsed      : ", style="white")
-    t.append(f"{_fmt_hms(elapsed)}\n", style="white")
-    t.append("ETA          : ", style="white")
-    t.append(
-        _fmt_hms(eta_seconds) if eta_seconds > 0 else "unknown",
-        style="blue",
-    )
-
-    return Panel(t, title="", border_style="bright_cyan", padding=(0, 1))
-
 
 
 def build_aircrack_status_panel(
@@ -291,54 +208,57 @@ def build_aircrack_status_panel(
     found_password: str = "",
     status: str = "running",
     activity: str = "",
+    percent: float = 0.0,
+    eta_text: str = "",
+    master_key: str = "",
+    transient_key: str = "",
+    eapol_hmac: str = "",
 ) -> Panel:
-    header = Text()
-    header.append(f"{method}\n", style="cyan bold")
-    header.append("WPA handshake crack status", style="dim")
+    actual_percent = percent
+    if actual_percent <= 0 and total > 0:
+        actual_percent = min(100.0, (tested / total) * 100.0)
 
-    stats = Table.grid(padding=(0, 2))
-    stats.add_column(style="cyan")
-    stats.add_column(style="white")
-    stats.add_row("BSSID", bssid or "unknown")
-    stats.add_row("Capture", cap_file)
-    if found_password:
-        status_style = "green"
-    elif status in ("exhausted", "failed", "error"):
-        status_style = "red"
-    else:
-        status_style = "yellow"
-    stats.add_row("Wordlist", wordlist)
-    stats.add_row("Status", Text(status.upper(), style=status_style))
-    stats.add_row("Keys tested", f"{tested:,}" if tested else "0")
-    stats.add_row("Speed", _format_speed(keys_per_second))
-    stats.add_row("Elapsed", _fmt_hms(elapsed))
-    stats.add_row("ETA", _fmt_hms(eta_seconds) if eta_seconds > 0 else "unknown")
-    if current_key:
-        stats.add_row("Current key", current_key)
+    speed = keys_per_second / 1000.0
+    eta = eta_text or (_fmt_hms(eta_seconds) if eta_seconds > 0 else "unknown")
+    passphrase = current_key or "waiting..."
 
-    progress = Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=38),
-        TextColumn("[progress.percentage]{task.percentage:>5.1f}%"),
-        expand=False,
+    body = Text(justify="center")
+    body.append(f"{method}\n\n", style="bold white")
+    body.append(
+        f"[{_fmt_hms(elapsed)}]  {tested}/{total or '?'} keys tested ({speed:,.2f} K/s)\n\n",
+        style="white",
     )
-    task_total = total if total > 0 else 100
-    task_completed = min(tested, total) if total > 0 else 0
-    progress.add_task("Progress", total=task_total, completed=task_completed)
+    body.append("Time left: ", style="white")
+    body.append(eta, style="white")
+    body.append(f"{actual_percent:>28.2f}%\n\n", style="white")
+    body.append("Current passphrase: ", style="white")
+    body.append(f"{passphrase}\n\n", style="white")
 
-    footer = Text()
     if found_password:
-        footer.append("KEY FOUND! [ ", style="green bold")
-        footer.append(found_password, style="bright_green bold")
-        footer.append(" ]", style="green bold")
+        body.append("KEY FOUND! [ ", style="green bold")
+        body.append(found_password, style="bright_green bold")
+        body.append(" ]\n\n", style="green bold")
+    elif status in ("exhausted", "failed", "error"):
+        body.append(f"{status.upper()}\n\n", style="red bold")
+
+    def append_key(label: str, value: str) -> None:
+        body.append(f"{label:<16}: ", style="white")
+        body.append((value or "--") + "\n\n", style="white")
+
+    append_key("Master Key", master_key)
+    append_key("Transient Key", transient_key)
+    append_key("EAPOL HMAC", eapol_hmac)
+
+    footer = Text(justify="center")
+    if found_password:
+        footer.append("Crack complete", style="green")
     else:
         if activity:
             footer.append(f"{activity} ", style="cyan bold")
-        footer.append("Trying passphrases...", style="yellow")
+        footer.append("Trying passphrases...", style="dim")
 
     return Panel(
-        Group(header, Text(""), stats, Text(""), progress, Text(""), footer),
-        title="Crack",
-        border_style="bright_cyan",
-        padding=(0, 1),
+        Align.center(Group(body, footer), vertical="top"),
+        border_style="bright_black",
+        padding=(1, 3),
     )

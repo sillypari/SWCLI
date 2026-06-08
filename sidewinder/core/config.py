@@ -6,7 +6,7 @@ Configuration is stored in ~/.sidewinder/config.json
 import json
 import logging
 import os
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +16,9 @@ class SidewinderConfig:
     """Application configuration."""
     
     # Paths
-    capture_dir: str = "~/.sidewinder/captures"
-    wordlist_dir: str = "~/.sidewinder/wordlists"
-    results_dir: str = "~/.sidewinder/results"
+    capture_dir: str = "./swcli-output/captures"
+    wordlist_dir: str = "./swcli-output/wordlists"
+    results_dir: str = "./swcli-output"
     
     # Defaults
     default_wordlist: str = "/usr/share/wordlists/rockyou.txt"
@@ -67,7 +67,12 @@ class SidewinderConfig:
             import dataclasses
             valid_keys = {f.name for f in dataclasses.fields(cls)}
             filtered_data = {k: v for k, v in data.items() if k in valid_keys}
-            return cls(**filtered_data)
+            config = cls(**filtered_data)
+            if config.capture_dir == "~/.sidewinder/captures":
+                config.capture_dir = "./swcli-output/captures"
+            if config.results_dir == "~/.sidewinder/results":
+                config.results_dir = "./swcli-output"
+            return config
         except Exception as e:
             logger.error("Failed to load config (using defaults): %s", e)
             return cls()

@@ -1,9 +1,9 @@
 import os
 import shutil
-from datetime import datetime
 from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_choice
-from swcli.repl.renderer import print_table, print_success, print_error, yes_no
+from swcli.repl.renderer import print_table, print_success, yes_no
+from sidewinder.core.paths import output_root
 
 REQUIRED_BINS = ["airodump-ng", "aireplay-ng", "aircrack-ng", "iw", "ip"]
 OPTIONAL_BINS = ["hashcat", "hcxpcapngtool", "airbase-ng", "reaver", "dnsmasq"]
@@ -40,6 +40,7 @@ async def cmd_status(repl):
         ["Last capture", _path_state(repl.session.last_cap_file)],
         ["Captures tracked", str(len(repl.session.captures))],
         ["Last wordlist", repl.session.last_wordlist or "[dim]none[/dim]"],
+        ["Output directory", _path_state(output_root())],
     ]
     print_table(["Item", "Value"], rows, "SWCLI Status")
     repl.print("\n  [dim]User control: this screen does not start, stop, kill, or modify anything.[/dim]")
@@ -80,14 +81,17 @@ async def cmd_doctor(repl):
     except Exception as e:
         rows.append(["Interface check", "[red]NO[/red]", str(e)])
 
-    try:
-        import scapy.all  # noqa: F401
-        rows.append(["Scapy import", "[green]YES[/green]", "EAPOL validation available"])
-    except Exception as e:
-        rows.append(["Scapy import", "[red]NO[/red]", str(e)])
+    from importlib.util import find_spec
+    scapy_available = find_spec("scapy") is not None
+    rows.append([
+        "Scapy package",
+        _yes(scapy_available),
+        "EAPOL validation available" if scapy_available else "install scapy for handshake validation",
+    ])
 
-    tmp_ok = os.access("/tmp", os.W_OK)
-    rows.append(["/tmp writable", _yes(tmp_ok), "capture output location"])
+    out_dir = output_root()
+    out_ok = os.access(out_dir, os.W_OK)
+    rows.append(["Output dir writable", _yes(out_ok), out_dir])
     print_table(["Check", "OK", "Detail"], rows, "Preflight Doctor")
     repl.print("\n  [dim]Doctor is read-only. Adapter support rows are reported capability, not proof; use /adapters test injection for an explicit active test.[/dim]")
 

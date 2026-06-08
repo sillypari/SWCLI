@@ -1,9 +1,7 @@
 import os
-import json
-from pathlib import Path
 from swcli.repl.palette import Command, CommandPalette
-from swcli.repl.prompts import prompt_text, prompt_confirm
-from sidewinder.core.session import Session, Network, Client
+from swcli.repl.prompts import prompt_text
+from sidewinder.core.session import Session
 from swcli.repl.renderer import print_success, print_error, print_table
 from swcli.repl.session_ui import list_autosaves
 

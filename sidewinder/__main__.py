@@ -1,10 +1,6 @@
-"""Sidewinder Entry Point.
+"""Compatibility entry point for the SWCLI console."""
 
-Invoked via `python -m sidewinder` or the `sidewinder` console script.
-"""
-import sys
+from swcli.__main__ import main
 
 if __name__ == "__main__":
-    print("The Textual TUI is deprecated in favor of the new SWCLI.")
-    print("Please use the 'swcli.py' script located in the root directory to run commands.")
-    sys.exit(1)
+    main()

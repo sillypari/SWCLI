@@ -2,10 +2,12 @@ import asyncio
 import os
 import glob
 import time
+import gzip
 from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_text, prompt_mac, prompt_confirm, prompt_choice
 from swcli.repl.session_ui import auto_fill_prompt
 from sidewinder.core.cracker import crack_aircrack, crack_hashcat, find_wordlists, CrackProgress
+from sidewinder.core.paths import output_root
 from rich.live import Live
 from swcli.repl.renderer import (
     build_aircrack_status_panel,
@@ -16,8 +18,22 @@ from swcli.repl.renderer import (
 )
 
 def _get_cap_file(repl) -> str:
-    files = glob.glob("/tmp/swcli_cap_*-01.cap") + glob.glob("/tmp/swcli_cap-*.cap")
-    files.sort(key=os.path.getmtime, reverse=True)
+    files = []
+    for path in [getattr(repl.session, "last_cap_file", "")] + list(getattr(repl.session, "captures", [])):
+        if path and os.path.isfile(path) and path not in files:
+            files.append(path)
+    root = output_root()
+    globbed = (
+        glob.glob(os.path.join(root, "scans", "*.cap"))
+        + glob.glob(os.path.join(root, "captures", "*.cap"))
+        + glob.glob("/tmp/swcli_scan-01.cap")
+        + glob.glob("/tmp/swcli_cap_*-01.cap")
+        + glob.glob("/tmp/swcli_cap-*.cap")
+    )
+    globbed.sort(key=os.path.getmtime, reverse=True)
+    for path in globbed:
+        if path not in files:
+            files.append(path)
     
     if files:
         choices = []
@@ -82,6 +98,15 @@ def _resolve_wordlist_path(path: str) -> str | None:
     return path
 
 
+def _count_wordlist_entries(path: str) -> int:
+    opener = gzip.open if path.lower().endswith(".gz") else open
+    try:
+        with opener(path, "rt", encoding="utf-8", errors="ignore") as f:
+            return sum(1 for line in f if line.rstrip("\n\r"))
+    except OSError:
+        return 0
+
+
 def _get_wordlist(repl) -> str:
     wls = find_wordlists()
     if wls:
@@ -116,6 +141,11 @@ def _create_crack_render(method: str, cap_file: str, bssid: str, wordlist: str, 
             found_password=state["found_password"],
             status=state["status"],
             activity=state["activity"],
+            percent=state["percent"],
+            eta_text=state["eta_text"],
+            master_key=state["master_key"],
+            transient_key=state["transient_key"],
+            eapol_hmac=state["eapol_hmac"],
         )
     return render
 
@@ -153,9 +183,24 @@ async def cmd_crack_aircrack(repl):
     conf = prompt_confirm("Start Aircrack-ng?")
     if conf.cancelled or not conf.value: return
     
-    repl.print("\n [dim]Initializing Aircrack-ng...[/dim]")
+    repl.print("\n [dim]Counting wordlist and initializing Aircrack-ng...[/dim]")
     start_time = time.monotonic()
-    state = {"tested": 0, "total": 0, "speed": 0.0, "eta": 0.0, "current_key": "", "found_password": "", "status": "running", "activity": "|"}
+    total_keys = _count_wordlist_entries(wordlist)
+    state = {
+        "tested": 0,
+        "total": total_keys,
+        "speed": 0.0,
+        "eta": 0.0,
+        "eta_text": "",
+        "percent": 0.0,
+        "current_key": "",
+        "found_password": "",
+        "master_key": "",
+        "transient_key": "",
+        "eapol_hmac": "",
+        "status": "running",
+        "activity": "|",
+    }
     activity_frames = ("|", "/", "-", "\\")
     done = False
     render = _create_crack_render("Aircrack-ng", cap_file, bssid_res.value, wordlist, state, start_time)
@@ -169,7 +214,7 @@ async def cmd_crack_aircrack(repl):
             await asyncio.sleep(0.2)
 
     try:
-        with Live(render(), console=console, refresh_per_second=8, transient=False) as live:
+        with Live(render(), console=console, refresh_per_second=8, screen=True, transient=False) as live:
             anim_task = asyncio.create_task(animate(live))
             def on_progress(p: CrackProgress) -> None:
                 state.update({
@@ -177,7 +222,12 @@ async def cmd_crack_aircrack(repl):
                     "total": p.total_keys or state["total"],
                     "speed": p.keys_per_second or state["speed"],
                     "eta": p.eta_seconds,
+                    "eta_text": p.eta_text or state["eta_text"],
+                    "percent": p.percent or state["percent"],
                     "current_key": p.current_key or state["current_key"],
+                    "master_key": p.master_key or state["master_key"],
+                    "transient_key": p.transient_key or state["transient_key"],
+                    "eapol_hmac": p.eapol_hmac or state["eapol_hmac"],
                 })
                 live.update(render(), refresh=True)
 
@@ -222,9 +272,24 @@ async def cmd_crack_hashcat(repl):
     conf = prompt_confirm("Start Hashcat (Requires hcxpcapngtool)?")
     if conf.cancelled or not conf.value: return
     
-    repl.print("\n [dim]Converting to hashcat format and initializing...[/dim]")
+    repl.print("\n [dim]Counting wordlist, converting to hashcat format, and initializing...[/dim]")
     start_time = time.monotonic()
-    state = {"tested": 0, "total": 0, "speed": 0.0, "eta": 0.0, "current_key": "", "found_password": "", "status": "running", "activity": "|"}
+    total_keys = _count_wordlist_entries(wordlist)
+    state = {
+        "tested": 0,
+        "total": total_keys,
+        "speed": 0.0,
+        "eta": 0.0,
+        "eta_text": "",
+        "percent": 0.0,
+        "current_key": "",
+        "found_password": "",
+        "master_key": "",
+        "transient_key": "",
+        "eapol_hmac": "",
+        "status": "running",
+        "activity": "|",
+    }
     activity_frames = ("|", "/", "-", "\\")
     done = False
     render = _create_crack_render("Hashcat", cap_file, "auto", wordlist, state, start_time)
@@ -238,7 +303,7 @@ async def cmd_crack_hashcat(repl):
             await asyncio.sleep(0.2)
 
     try:
-        with Live(render(), console=console, refresh_per_second=8, transient=False) as live:
+        with Live(render(), console=console, refresh_per_second=8, screen=True, transient=False) as live:
             anim_task = asyncio.create_task(animate(live))
             def on_progress(p: CrackProgress) -> None:
                 state.update({
@@ -246,7 +311,12 @@ async def cmd_crack_hashcat(repl):
                     "total": p.total_keys or state["total"],
                     "speed": p.keys_per_second or state["speed"],
                     "eta": p.eta_seconds,
+                    "eta_text": p.eta_text or state["eta_text"],
+                    "percent": p.percent or state["percent"],
                     "current_key": p.current_key or state["current_key"],
+                    "master_key": p.master_key or state["master_key"],
+                    "transient_key": p.transient_key or state["transient_key"],
+                    "eapol_hmac": p.eapol_hmac or state["eapol_hmac"],
                 })
                 live.update(render(), refresh=True)
 

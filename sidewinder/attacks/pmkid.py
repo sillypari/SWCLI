@@ -8,6 +8,7 @@ import os
 from typing import Any, Optional
 
 from ..core.attack import BaseAttackEngine, AttackConfig, AttackResult, AttackState
+from ..core.paths import hash_path, output_dir
 from ..core.subprocess_mgr import SubprocessManager
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,8 @@ class PMKIDEngine(BaseAttackEngine):
         if not iface:
             return AttackResult(False, ["No interface provided for PMKID attack."])
 
-        capture_file = os.path.expanduser(f"~/.sidewinder/captures/pmkid_{config.target_bssid.replace(':', '')}.pcapng")
+        safe_bssid = config.target_bssid.replace(":", "")
+        capture_file = os.path.join(output_dir("captures"), f"pmkid_{safe_bssid}.pcapng")
         os.makedirs(os.path.dirname(capture_file), exist_ok=True)
 
         self.state = AttackState.RUNNING
@@ -69,7 +71,7 @@ class PMKIDEngine(BaseAttackEngine):
             await self.stop()
 
             # Convert pcapng to hashcat format (22000)
-            hash_file = capture_file.replace(".pcapng", ".hc22000")
+            hash_file = hash_path(f"pmkid_{safe_bssid}.hc22000")
             await self._emit_progress(status="Converting capture to hashcat format...")
 
             conv_result = await self.mgr.run(

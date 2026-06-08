@@ -1,7 +1,7 @@
 from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_choice, prompt_confirm
 from sidewinder.adapters import AdapterManager
-from sidewinder.core.monitor import enter_monitor_mode, exit_monitor_mode
+from sidewinder.core.monitor import exit_monitor_mode
 from swcli.repl.renderer import print_success, print_error, print_info
 
 async def cmd_monitor_start(repl):

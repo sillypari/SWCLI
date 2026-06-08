@@ -5,6 +5,7 @@ from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_text, prompt_mac, prompt_channel, prompt_confirm, prompt_choice
 from swcli.repl.session_ui import auto_fill_prompt
 from sidewinder.core.capture import capture_passive, capture_deauth, validate_handshake, extract_handshake_messages
+from sidewinder.core.paths import capture_prefix
 from sidewinder.attacks.pmkid import PMKIDEngine
 from sidewinder.core.attack import AttackConfig
 from rich.live import Live
@@ -201,7 +202,7 @@ async def cmd_capture_passive(repl):
     conf = prompt_confirm("Start Passive Capture?")
     if conf.cancelled or not conf.value: return
     
-    out = f"/tmp/swcli_cap_{int(time.time())}"
+    out = capture_prefix("passive")
     repl.print("\n  [cyan]Listening for handshakes...[/cyan]")
     start = time.monotonic()
     state = {"m1": False, "m2": False, "m3": False, "m4": False, "status": "waiting", "activity": "|", "analysis_passes": 0}
@@ -273,7 +274,7 @@ async def cmd_capture_deauth(repl):
     conf = prompt_confirm("Start Deauth Capture?")
     if conf.cancelled or not conf.value: return
     
-    out = f"/tmp/swcli_cap_{int(time.time())}"
+    out = capture_prefix("deauth")
     repl.print("\n  [cyan]Deauthenticating and capturing...[/cyan]")
     start = time.monotonic()
     state = {"m1": False, "m2": False, "m3": False, "m4": False, "status": "waiting", "activity": "|", "analysis_passes": 0}
@@ -378,7 +379,6 @@ def _latest_successful_capture(repl):
     if repl.session.last_cap_file:
         candidates.append(repl.session.last_cap_file)
     candidates.extend(reversed(repl.session.captures))
-    candidates.extend(["/tmp/swcli_scan-01.cap", "/tmp/swcli_cap-01.cap"])
 
     seen = set()
     for path in candidates:

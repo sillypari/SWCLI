@@ -73,6 +73,7 @@ class SwcliREPL:
             "/deauth": "/capture deauth",
             "/passive": "/capture passive",
             "/crack": "/crack aircrack",
+            "/crash": "/crack aircrack",
             "/targets": "/target",
             "/handsake": "/handshake",
             "/hanskae": "/handshake",

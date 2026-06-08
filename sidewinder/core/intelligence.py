@@ -5,7 +5,7 @@ based on signal strength, client activity, and encryption.
 Does NOT auto-execute attacks—only provides recommendations.
 """
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 from .session import Network, Client
 

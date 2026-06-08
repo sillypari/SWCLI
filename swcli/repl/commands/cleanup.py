@@ -1,15 +1,18 @@
 from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_confirm
 from sidewinder.core.cleanup import get_cleanup_manager
+from sidewinder.core.paths import output_root
 from swcli.repl.renderer import print_success
 import subprocess
+import shutil
+import os
 
 async def cmd_cleanup_full(repl):
     repl.print("  [bold]Full cleanup will:[/bold]")
     repl.print("    1. Kill attack processes")
     repl.print("    2. Exit monitor mode")
     repl.print("    3. Restore NetworkManager")
-    repl.print("    4. Delete /tmp/sidewinder_* files")
+    repl.print(f"    4. Delete generated files under {output_root()}")
     
     conf = prompt_confirm("\n  Run full cleanup?")
     if conf.cancelled or not conf.value: return
@@ -25,11 +28,13 @@ async def cmd_cleanup_procs(repl):
         repl.print(f"    [+] Sent SIGKILL to {p}")
 
 async def cmd_cleanup_files(repl):
-    conf = prompt_confirm("Delete temp files (/tmp/swcli_*)?")
+    root = output_root()
+    conf = prompt_confirm(f"Delete generated files under {root}?")
     if conf.cancelled or not conf.value: return
-    mgr = get_cleanup_manager()
-    await mgr.cleanup_files(dry_run=False)
-    print_success("Temp files deleted.")
+    if os.path.isdir(root):
+        shutil.rmtree(root)
+    os.makedirs(root, exist_ok=True)
+    print_success("Generated files deleted.")
 
 def register_commands(palette: CommandPalette):
     palette.register(Command("/cleanup", "Full cleanup", "System", cmd_cleanup_full))
