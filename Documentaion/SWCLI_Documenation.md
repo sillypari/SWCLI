@@ -24,7 +24,7 @@ SWCLI is the command-line interface for the Sidewinder wireless audit toolkit. I
 
 ```text
 sidewinder/
-  core/       Scanner, monitor mode, capture, cracking, sessions, config, cleanup
+  core/       Scanner, monitor mode, capture validation, cracking, paths, sessions, config, cleanup
   adapters/   Adapter profiles and chipset-specific behavior
   attacks/    Deauth, Evil Twin, PMKID, WPS modules
 
@@ -37,7 +37,7 @@ swcli/
 Run commands from the repository root:
 
 ```bash
-cd /home/codex/SWCLI
+cd /path/to/SWCLI
 ```
 
 ## Requirements
@@ -110,7 +110,7 @@ There is no packaging metadata committed yet, so run SWCLI directly from the rep
 1. Clone or place the repository on disk.
 
 ```bash
-cd /home/codex/SWCLI
+cd /path/to/SWCLI
 ```
 
 2. Install Python dependencies.
@@ -279,6 +279,10 @@ Monitor and injection fields are reports from chipset/driver detection. Some dri
 
 The live scan table is realtime-first. Rows represent the current scan frame. If APs or clients were seen recently but are not in the current frame, SWCLI reports that separately in the footer instead of mixing stale rows into the live table.
 
+SWCLI preserves EAPOL state once observed during a scan. If a later airodump update drops the EAPOL flag, the AP remains marked for the session. Client-side EAPOL also promotes the associated AP to EAPOL so `/handshake`, `/crack`, and later capture selection can see that handshake traffic was observed.
+
+The scanner writes capture output under `./swcli-output/scans/` by default and records the latest scan capture in the current session when EAPOL frames are validated.
+
 Stop a live scan with `Ctrl+C`. SWCLI keeps the scan results in the current session.
 
 ### Capture and Validation
@@ -293,6 +297,8 @@ Stop a live scan with `Ctrl+C`. SWCLI keeps the scan results in the current sess
 
 Passive capture is the safest first attempt. Deauth capture transmits frames and should only be used with explicit authorization.
 
+Capture validation checks rotated airodump output segments together. For example, validating `deauth_YYYYMMDD_HHMMSS-01.cap` also considers matching `deauth_YYYYMMDD_HHMMSS-02.cap`, `-03.cap`, and later segments when present. This matters because airodump can rotate files during longer captures, and the M1-M4 handshake frames may not all land in `-01.cap`.
+
 ### Crack
 
 ```text
@@ -302,6 +308,8 @@ Passive capture is the safest first attempt. Deauth capture transmits frames and
 ```
 
 Common wordlist paths are auto-discovered, including `rockyou.txt` locations and common system wordlists. You can also enter a wordlist path manually.
+
+The Aircrack-ng crack screen follows native aircrack-style progress: elapsed time, tested keys, total keys when known, speed in `K/s`, ETA, percent, current passphrase, and any master key, transient key, or EAPOL HMAC fields printed by aircrack-ng. `/crash` is accepted as an alias for the crack screen.
 
 ### Attack
 
@@ -389,24 +397,29 @@ sudo python3 -m swcli scan wlan0mon --channels 1,6,11
 python3 -m swcli scan results
 ```
 
+Direct scans write capture output under `./swcli-output/scans/` by default.
+
 ### Capture
 
 Passive capture:
 
 ```bash
-sudo python3 -m swcli capture passive wlan0mon AA:BB:CC:DD:EE:FF 6 --output /tmp/sidewinder_cap --timeout 300
+sudo python3 -m swcli capture passive wlan0mon AA:BB:CC:DD:EE:FF 6 --timeout 300
 ```
+
+If `--output` is omitted, SWCLI writes to `./swcli-output/captures/passive_YYYYMMDD_HHMMSS-01.cap`.
 
 Deauth capture:
 
 ```bash
 sudo python3 -m swcli capture deauth wlan0mon AA:BB:CC:DD:EE:FF 6 \
   --client FF:FF:FF:FF:FF:FF \
-  --output /tmp/sidewinder_cap \
   --count 10 \
   --bursts 3 \
   --timeout 300
 ```
+
+If `--output` is omitted, SWCLI writes to `./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-01.cap`.
 
 PMKID capture:
 
@@ -414,10 +427,12 @@ PMKID capture:
 sudo python3 -m swcli capture pmkid wlan0mon AA:BB:CC:DD:EE:FF 6 --timeout 300
 ```
 
+PMKID captures are written under `./swcli-output/captures/`. Converted PMKID hash files are written under `./swcli-output/hashes/`.
+
 ### Validate
 
 ```bash
-python3 -m swcli validate /tmp/sidewinder_cap-01.cap
+python3 -m swcli validate ./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-01.cap
 ```
 
 ### Crack
@@ -426,7 +441,7 @@ Aircrack-ng:
 
 ```bash
 python3 -m swcli wordlists
-python3 -m swcli crack aircrack /tmp/sidewinder_cap-01.cap \
+python3 -m swcli crack aircrack ./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-01.cap \
   --bssid AA:BB:CC:DD:EE:FF \
   --wordlist /usr/share/wordlists/rockyou.txt
 ```
@@ -434,7 +449,7 @@ python3 -m swcli crack aircrack /tmp/sidewinder_cap-01.cap \
 Hashcat:
 
 ```bash
-python3 -m swcli crack hashcat /tmp/sidewinder_cap-01.cap \
+python3 -m swcli crack hashcat ./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-01.cap \
   --wordlist /usr/share/wordlists/rockyou.txt
 ```
 
@@ -469,6 +484,8 @@ sudo python3 -m swcli cleanup procs
 python3 -m swcli cleanup files --dry-run
 sudo python3 -m swcli cleanup files
 ```
+
+`cleanup files` targets generated files under the configured output root. With the default config, that is `./swcli-output/`.
 
 ### Session
 
@@ -633,11 +650,29 @@ Known channel and stable BSSID
 ~/.sidewinder/session.json      Default current session
 ~/.sidewinder/sessions/         Saved session archive
 ~/.sidewinder/autosaves/        Rotating REPL autosaves
-~/.sidewinder/captures/         Configured capture directory
-/tmp/swcli_scan-01.cap          Default scan capture output
-/tmp/swcli_cap_*-01.cap         REPL capture outputs
-/tmp/sidewinder_cap-01.cap      Common direct CLI capture output
+./swcli-output/                 Default app-local output root
+./swcli-output/scans/           Scan capture files and scan FIFOs
+./swcli-output/captures/        Passive, deauth, and PMKID capture files
+./swcli-output/attacks/         Attack workflow output files
+./swcli-output/hashes/          Converted PMKID/hashcat hash files
+./swcli-output/wordlists/       App-local wordlist directory
 ```
+
+SWCLI keeps user configuration and sessions under `~/.sidewinder/`, but generated audit artifacts are now stored in the repository working directory by default so they are easy to find and clean up. The output root comes from `results_dir`; the default is `./swcli-output`.
+
+Existing configs that still contain the old defaults `~/.sidewinder/captures` or `~/.sidewinder/results` are migrated in memory to the new app-local paths when loaded. Manually customized absolute paths are left unchanged.
+
+Generated filename prefixes include timestamps:
+
+```text
+./swcli-output/scans/scan_YYYYMMDD_HHMMSS-01.cap
+./swcli-output/captures/passive_YYYYMMDD_HHMMSS-01.cap
+./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-01.cap
+./swcli-output/attacks/deauth_YYYYMMDD_HHMMSS-01.cap
+./swcli-output/hashes/pmkid_AABBCCDDEEFF.hc22000
+```
+
+`/status` shows the active output directory. `/doctor` verifies that the output directory is writable. `/cleanup files` removes generated files under `./swcli-output/`.
 
 ### Configuration Keys
 
@@ -766,6 +801,40 @@ Try:
 /capture deauth
 /handshake
 ```
+
+### EAPOL Seen During Scan But Not Reflected Later
+
+SWCLI now preserves EAPOL once it is observed during `/scan`. If EAPOL is seen on a client row, the associated AP is also marked with EAPOL. After the scan stops, SWCLI validates the latest scan capture and stores it in the current session when EAPOL frames are present.
+
+Check:
+
+```text
+/scan results
+/handshake
+/crack aircrack
+```
+
+If `/crack` cannot find a capture in the session, it also searches recent files under `./swcli-output/scans/` and `./swcli-output/captures/`.
+
+### M1-M4 Missing During Deauth Capture
+
+Airodump-ng can rotate capture files during a run. The live capture validator now checks every matching rotated segment, not only `-01.cap`, before reporting M1-M4.
+
+Example set:
+
+```text
+./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-01.cap
+./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-02.cap
+./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-03.cap
+```
+
+Validating any one of the matching segment files checks the whole set.
+
+### Crack Screen Looks Stuck Or Appears In The Wrong Place
+
+The crack UI uses a full-screen Rich live display so progress stays at the top of the terminal while aircrack-ng runs. Aircrack-ng progress is rendered in its native shape: keys tested, ETA, percent, current passphrase, and key material fields when aircrack-ng prints them.
+
+Speed is displayed as `K/s`. Internally, SWCLI normalizes aircrack-ng speed output so the UI does not show ambiguous `M/s` or raw `keys/s` labels.
 
 ### Injection Report Says No, But Hardware Works
 

@@ -25,9 +25,10 @@ CARD_SETTINGS: dict[str, dict[str, dict | None]] = {
     },
     "MT7902": {
         "scan":    {"mode": "managed"},
-        "capture": None,  # Not supported
-        "deauth":  None,  # Not supported
-        "inject":  None,  # Not supported
+        "capture": {"mode": "monitor", "fallback": True},
+        "deauth":  {"mode": "monitor", "fallback": True, "count": 3},
+        "inject":  {"mode": "monitor", "fallback": True},
+        "evil_twin": {"mode": "monitor+AP", "fallback": True},
     },
 }
 

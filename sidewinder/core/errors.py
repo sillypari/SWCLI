@@ -212,14 +212,14 @@ ERROR_DB: dict[str, SidewinderError] = {
             "  Reboot",
         ],
     ),
-    "MT7902_NO_INJECTION": SidewinderError(
-        severity=Severity.ERROR,
+    "MT7902_INJECTION_RUNTIME_RISK": SidewinderError(
+        severity=Severity.WARNING,
         category=Category.HARDWARE,
-        what="MT7902 cannot perform packet injection",
-        why="Built-in WiFi card has no TX path in monitor mode",
+        what="MT7902 injection support depends on the active driver",
+        why="SWCLI allows this adapter, but runtime tools may still fail if the driver rejects injection",
         how_to_fix=[
-            "Use RT5370 or RTL8821AU USB adapter for injection",
-            "MT7902 is for internet connectivity only",
+            "Use wlo1/MT7902 only as an emergency fallback",
+            "Prefer RT5370 or RTL8821AU when available",
         ],
     ),
     "WORDLIST_NOT_FOUND": SidewinderError(
@@ -345,12 +345,12 @@ ADAPTER_ERRORS: dict[str, dict[str, dict]] = {
         },
     },
     "MT7902": {
-        "NO_INJECTION": {
-            "what": "MT7902 cannot perform packet injection",
-            "why": "Driver has no TX path for monitor mode",
+        "INJECTION_RUNTIME_RISK": {
+            "what": "MT7902 injection support depends on the active driver",
+            "why": "SWCLI does not block MT7902, but runtime tools may still fail if the driver rejects injection",
             "how_to_fix": [
-                "Use RT5370 or RTL8821AU for injection operations",
-                "MT7902 (wlo1) is for internet connectivity only",
+                "Use wlo1/MT7902 only as an emergency fallback",
+                "Prefer RT5370 or RTL8821AU when available",
             ],
         },
         "KERNEL_PANIC": {

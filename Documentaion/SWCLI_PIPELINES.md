@@ -118,13 +118,13 @@ SCAN: /sys/class/net/*/phy80211
 FOR EACH wireless interface:
     Read: phy, driver, bus, mac, vid, pid, mode, is_up
     Lookup in KNOWN_DEVICES registry
-    Classify: OPTIMIZED / WORKING / LIMITED / INTERNET_ONLY
+    Classify: OPTIMIZED / WORKING / LIMITED / EMERGENCY
 
 OUTPUT:
   #   Interface          Chipset     Driver      Bus   Mode     Bands    Monitor  Inject  Status
   1   wlx5c628b765de2    RTL8821AU   rtw88       usb   managed  2.4/5G   YES      YES     OPTIMIZED
   2   wlx001ea6c65744    RT5370      rt2800usb   usb   monitor  2.4G     YES      YES     WORKING
-  3   wlo1               MT7902      mt7921e     pci   managed  2.4/5G   NO       NO      INTERNET_ONLY
+  3   wlo1               MT7902      mt7921e     pci   managed  2.4/5G   YES      YES     EMERGENCY
 
   Total: 3 adapters found
   Use: swcli monitor <interface> to enter monitor mode

@@ -1,35 +1,32 @@
-"""Sidewinder MT7902 Adapter — Detection + Protection.
+"""Sidewinder MT7902 adapter profile.
 
 MT7902 (MediaTek) — built-in WiFi on this system (wlo1).
-This is the INTERNET adapter ONLY. It has NO packet injection support.
+This is an emergency fallback adapter. SWCLI does not block any operation
+in software, but runtime success still depends on the installed driver.
 
-Status: INTERNET_ONLY
-- Monitor mode: RX-only (cannot inject)
-- Injection: NO
-- All attack operations BLOCKED with clear error messages
-
-Protection pattern:
-  check_adapter_allowed(mt7902_adapter, "deauth")
-  → raises SidewinderError with chipset-specific message
+Status: EMERGENCY
+- Monitor mode: allowed
+- Injection/deauth/evil-twin: allowed by policy, may fail at driver/runtime
 """
 from __future__ import annotations
 
 import logging
+import subprocess
 
-from ..core.errors import Category, Severity, SidewinderError
 from .base import Adapter
 
 logger = logging.getLogger(__name__)
 
 # Operations the MT7902 can perform
 MT7902_RESTRICTIONS: dict[str, bool] = {
-    "monitor":   False,   # RX-only, no injection
-    "injection": False,   # No TX path in driver
-    "deauth":    False,   # Cannot inject deauth frames
-    "evil_twin": False,   # Cannot create AP
+    "monitor":   True,
+    "injection": True,
+    "inject":    True,
+    "deauth":    True,
+    "evil_twin": True,
     "scan":      True,    # Can scan in managed mode
     "internet":  True,    # Primary purpose: internet connectivity
-    "capture":   False,   # Cannot inject — passive RX only
+    "capture":   True,
 }
 
 
@@ -53,40 +50,24 @@ async def detect_mt7902() -> bool:
 
 
 def check_adapter_allowed(chipset: str, operation: str) -> None:
-    """Check if a chipset is allowed to perform an operation.
-
-    Raises SidewinderError with chipset-specific message if blocked.
-
-    Args:
-        chipset: Chipset name ("MT7902", "RT5370", "RTL8821AU")
-        operation: Operation to check ("deauth", "inject", "capture", etc.)
-    """
+    """Check if a chipset is allowed to perform an operation."""
     if chipset == "MT7902":
-        if not MT7902_RESTRICTIONS.get(operation, False):
-            raise SidewinderError(
-                severity=Severity.ERROR,
-                category=Category.HARDWARE,
-                what=f"MT7902 (wlo1) cannot perform '{operation}'",
-                why="Built-in WiFi card has RX-only monitor mode — no TX/injection path in driver",
-                how_to_fix=[
-                    "Use RT5370 (wlx001ea6c65744) for this operation",
-                    "Or use RTL8821AU (wlx5c628b765de2) with morrownr driver",
-                    "MT7902 is reserved for internet connectivity only",
-                ],
-            )
+        if not MT7902_RESTRICTIONS.get(operation, True):
+            raise RuntimeError(f"MT7902 operation disabled by policy: {operation}")
+        return
 
 
 class MT7902Adapter(Adapter):
     """MT7902 built-in WiFi adapter.
 
-    INTERNET_ONLY — all attack operations are blocked.
-    Attempting any restricted operation raises a SidewinderError
-    with a clear explanation and alternative suggestions.
+    Emergency fallback. SWCLI permits all operations and lets the runtime
+    driver/toolchain determine whether the operation actually works.
     """
 
     def __init__(self, iface: str, phy: str) -> None:
         self._iface = iface
         self._phy = phy
+        self._mon_iface: str | None = None
 
     @property
     def name(self) -> str:
@@ -106,27 +87,31 @@ class MT7902Adapter(Adapter):
 
     @property
     def monitor_capable(self) -> bool:
-        return False
+        return True
 
     @property
     def injection_capable(self) -> bool:
-        return False
+        return True
 
     async def enter_monitor(self) -> str:
-        """BLOCKED — MT7902 has no injection capability."""
-        check_adapter_allowed("MT7902", "monitor")
-        raise RuntimeError("unreachable")  # check_adapter_allowed raises
+        """Enter monitor mode as an emergency fallback."""
+        from ..core.monitor import enter_monitor_mode
+        self._mon_iface = await enter_monitor_mode(self._iface, self._phy)
+        return self._mon_iface
 
     async def exit_monitor(self, mon_iface: str) -> None:
-        """No-op — MT7902 never enters monitor mode."""
-        pass
+        """Exit monitor mode and restore managed mode."""
+        from ..core.monitor import exit_monitor_mode
+        await exit_monitor_mode(mon_iface, self._iface, self._phy)
+        self._mon_iface = None
 
     async def set_channel(self, channel: int) -> None:
-        """BLOCKED — MT7902 cannot set channel for attack operations."""
-        check_adapter_allowed("MT7902", "monitor")
-        raise RuntimeError("unreachable")
+        """Set channel for monitor/capture fallback."""
+        from ..core.monitor import set_channel
+        await set_channel(self._mon_iface or self._iface, channel)
 
     async def inject_frame(self, frame: bytes) -> None:
-        """BLOCKED — MT7902 cannot perform packet injection."""
-        check_adapter_allowed("MT7902", "injection")
-        raise RuntimeError("unreachable")
+        """Attempt packet injection through the active monitor interface."""
+        from ..core.subprocess_mgr import run
+        iface = self._mon_iface or self._iface
+        await run(["aireplay-ng", "--test", iface], timeout=30, check=False)

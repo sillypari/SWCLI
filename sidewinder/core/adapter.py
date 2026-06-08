@@ -26,8 +26,8 @@ KNOWN_DEVICES: dict[tuple[int, int], dict] = {
     (0x2357, 0x0120): {"name": "RTL8821AU", "chipset": "RTL8821AU", "bands": ["2.4G", "5G"], "monitor": True, "injection": True},
     (0x2357, 0x011E): {"name": "RTL8821AU", "chipset": "RTL8821AU", "bands": ["2.4G", "5G"], "monitor": True, "injection": True},
     (0x0BDA, 0x8812): {"name": "RTL8812AU", "chipset": "RTL8812AU", "bands": ["2.4G", "5G"], "monitor": True, "injection": True},
-    # MT7902 (PCIe built-in)
-    (0x14C3, 0x7902): {"name": "MT7902",    "chipset": "MT7902",   "bands": ["2.4G", "5G", "6G"], "monitor": False, "injection": False},
+    # MT7902 (PCIe built-in): emergency fallback. Runtime success depends on driver support.
+    (0x14C3, 0x7902): {"name": "MT7902",    "chipset": "MT7902",   "bands": ["2.4G", "5G", "6G"], "monitor": True, "injection": True},
 }
 
 ADAPTER_PRIORITY: dict[str, int] = {
@@ -57,7 +57,7 @@ class AdapterInfo:
     injection_capable: bool = False
     is_up: bool = False
     current_mode: str = ""  # "managed", "monitor", "unknown"
-    status: str = "UNKNOWN"  # "OPTIMIZED", "WORKING", "LIMITED", "INTERNET_ONLY"
+    status: str = "UNKNOWN"  # "OPTIMIZED", "WORKING", "LIMITED", "EMERGENCY"
 
     def display_status(self) -> str:
         """Human-readable status with emoji."""
@@ -68,8 +68,8 @@ class AdapterInfo:
                 return "[~] WORKING"
             case "LIMITED":
                 return "[-] LIMITED"
-            case "INTERNET_ONLY":
-                return "[i] INTERNET ONLY"
+            case "EMERGENCY":
+                return "[!] EMERGENCY"
             case _:
                 return "[?] UNKNOWN"
 
@@ -225,12 +225,12 @@ async def detect_adapter(iface: str) -> Optional[AdapterInfo]:
         info.injection_capable = False
 
     # Set status based on capabilities
-    if info.injection_capable and info.monitor_capable:
+    if info.chipset == "MT7902":
+        info.status = "EMERGENCY"
+    elif info.injection_capable and info.monitor_capable:
         info.status = "OPTIMIZED"
     elif info.monitor_capable:
         info.status = "WORKING"
-    elif info.chipset == "MT7902":
-        info.status = "INTERNET_ONLY"
     else:
         info.status = "LIMITED"
 
@@ -274,7 +274,7 @@ def get_best_adapter(
 
     Args:
         adapters: List of detected adapters, already sorted by priority.
-        operation: One of "scan", "capture", "deauth", "inject", "internet".
+        operation: One of "scan", "capture", "monitor", "deauth", "inject", "internet".
 
     Returns:
         The most suitable AdapterInfo, or None if no capable adapter exists.
@@ -289,12 +289,16 @@ def get_best_adapter(
                 return a
         return adapters[-1]
 
-    # For all attack/audit operations: need monitor capability, not the built-in NIC
-    capable = [
-        a for a in adapters
-        if a.monitor_capable and a.chipset != "MT7902"
-    ]
+    if operation in ("deauth", "inject", "evil_twin"):
+        capable = [
+            a for a in adapters
+            if a.monitor_capable and (a.injection_capable or a.chipset == "MT7902")
+        ]
+    else:
+        capable = [a for a in adapters if a.monitor_capable]
+
     if not capable:
         return None
+
     # Already sorted by priority — return highest ranked
     return capable[0]

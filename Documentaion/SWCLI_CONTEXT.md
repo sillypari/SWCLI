@@ -179,7 +179,7 @@ class AdapterInfo:
     injection_capable: bool = False
     is_up: bool = False
     current_mode: str = ""  # "managed", "monitor"
-    status: str = "UNKNOWN" # "OPTIMIZED", "WORKING", "LIMITED", "INTERNET_ONLY"
+    status: str = "UNKNOWN" # "OPTIMIZED", "WORKING", "LIMITED", "EMERGENCY"
 ```
 
 ### 3.7 CrackProgress (runtime only)
@@ -263,7 +263,7 @@ KNOWN_DEVICES = {
     (0x2357, 0x0120): {"name": "RTL8821AU","bands": ["2.4G", "5G"],  "monitor": True,  "injection": True},
     (0x2357, 0x011E): {"name": "RTL8821AU","bands": ["2.4G", "5G"],  "monitor": True,  "injection": True},
     (0x0BDA, 0x8812): {"name": "RTL8812AU","bands": ["2.4G", "5G"],  "monitor": True,  "injection": True},
-    (0x14C3, 0x7902): {"name": "MT7902",   "bands": ["2.4G","5G","6G"],"monitor": False,"injection": False},
+    (0x14C3, 0x7902): {"name": "MT7902",   "bands": ["2.4G","5G","6G"],"monitor": True,"injection": False},
 }
 ```
 
@@ -271,7 +271,7 @@ KNOWN_DEVICES = {
 - `OPTIMIZED` — injection + monitor capable
 - `WORKING` — monitor capable only
 - `LIMITED` — unknown, checked via `iw list`
-- `INTERNET_ONLY` — MT7902
+- `EMERGENCY` — MT7902/wlo1 fallback; SWCLI permits all operations, runtime success depends on driver support
 
 ---
 
@@ -539,7 +539,7 @@ class SidewinderError(Exception):
 **Error database (ERROR_DB):** 16+ predefined errors:
 - `ADAPTER_NOT_FOUND`, `MONITOR_MODE_FAILED`, `ROOT_REQUIRED`, `DISK_FULL`
 - `NO_HANDSHAKE`, `AIRODUMP_FAILED`, `AIRODUMP_STUCK`, `AIREPLAY_FAILED`
-- `RFKILL_BLOCKED`, `ADAPTER_DISCONNECTED`, `WRONG_DRIVER`, `MT7902_NO_INJECTION`
+- `RFKILL_BLOCKED`, `ADAPTER_DISCONNECTED`, `WRONG_DRIVER`, `MT7902_INJECTION_RUNTIME_RISK`
 - `WORDLIST_NOT_FOUND`, `CRACK_NO_RESULT`, `WPS_LOCKED`, `PMKID_TIMEOUT`
 - `VM_DETECTED`, `PCAP_CORRUPTED`, `EVIL_TWIN_DHCP_FAILED`
 
@@ -661,7 +661,7 @@ class BaseAttackEngine:
 
 **RT5370 (`rt5370.py`):** Standard mac80211 path, creates `{iface}mon` VIF
 **RTL8821AU (`rtl8821au.py`):** May need morrownr driver, uses bad driver fallback
-**MT7902 (`mt7902.py`):** INTERNET_ONLY — all attack ops blocked via `check_adapter_allowed()`
+**MT7902 (`mt7902.py`):** EMERGENCY — SWCLI permits all operations; injection/deauth/evil-twin may still fail at runtime if the driver refuses them
 
 ---
 
