@@ -14,10 +14,12 @@ It is designed for operators who want the power of tools such as `aircrack-ng`, 
 - Live `airodump-ng` scan view with access point and client tables.
 - Real-time scan data handling without showing stale rows as current activity.
 - Target selection from scan results instead of repeatedly typing BSSIDs.
-- Passive, deauth-assisted, and PMKID capture workflows.
+- Passive, deauth-assisted (with custom packet rates), and PMKID capture workflows.
 - Handshake validation and M1-M4 key-info inspection.
 - Aircrack-ng and Hashcat cracking helpers.
-- Evil Twin and WPS workflows with guided target selection and confirmation plans.
+- Advanced Evil Twin Pass with Captive Portal OS-detection, DNS Blackholing, and cloned UI variants (TP-Link, Hotel, etc.).
+- Multi-Band Evasion Detection `[MB]` and Dual-Adapter/Channel Hopping support for Deauth.
+- Guided WPS workflows with target selection and confirmation plans.
 - Adapter discovery, monitor-mode handling, and injection testing.
 - Session save/load/autosave support.
 - Professional Rich-based terminal output, help panels, `/about`, and `/help scan`.
@@ -226,9 +228,9 @@ Palette controls:
 | --- | --- |
 | `/attack evil-twin` | Alias for Evil Twin Simple open AP + logging |
 | `/attack evil-twin-simple` | Start open AP with notice/captive portal and metadata logging |
-| `/attack evil-twin-pass` | Start password-validation portal workflow for authorized labs |
+| `/attack evil-twin-pass` | Start password-validation portal workflow with Captive Portal OS-detection |
 | `/attack wps` | Start guided WPS Pixie-Dust workflow |
-| `/attack deauth` | Start guided deauth workflow |
+| `/attack deauth` | Start guided deauth workflow (supports Custom Deauth Rates and Dual-Adapter) |
 | `/help attack` | Explain attack workflows |
 
 Attack flows require explicit confirmation. Evil Twin and WPS workflows prefer selecting from the active target or current scan results before falling back to manual input.
@@ -300,7 +302,7 @@ Access point fields:
 | `#Data` | Captured AP data packets |
 | `#/s` | Recent data packet rate per second |
 | `CH` | Channel |
-| `MB` | Advertised maximum AP data rate |
+| `MB` | Multi-Band indicator `[MB]`. Appears if the ESSID spans multiple channels |
 | `HE` | 802.11ax / High Efficiency indicator when detected |
 | `ENC` | Encryption family |
 | `CIPHER` | Traffic cipher |

@@ -289,13 +289,13 @@ Stop a live scan with `Ctrl+C`. SWCLI keeps the scan results in the current sess
 
 ```text
 /capture passive  Capture handshakes without transmitting deauth frames
-/capture deauth   Capture while sending confirmed deauth frames
+/capture deauth   Capture while sending confirmed deauth frames (supports Dual-Adapter and Custom Rates)
 /capture pmkid    Try clientless PMKID capture
 /validate         Validate a .cap/.pcap handshake file
 /handshake        Show M1-M4 key-info bit details
 ```
 
-Passive capture is the safest first attempt. Deauth capture transmits frames and should only be used with explicit authorization.
+Passive capture is the safest first attempt. Deauth capture transmits frames and should only be used with explicit authorization. When targeting a Multi-Band network, Deauth capture supports **Dual-Adapter Capturing** (using two adapters simultaneously to monitor 2.4GHz and 5GHz bands) and **Channel Hopping**. You can also specify **Custom Deauth Packet Rates** (e.g., Recommended, Fast, Slow, or Custom PPS) to govern the aggressiveness of the attack.
 
 Capture validation checks rotated airodump output segments together. For example, validating `deauth_YYYYMMDD_HHMMSS-01.cap` also considers matching `deauth_YYYYMMDD_HHMMSS-02.cap`, `-03.cap`, and later segments when present. This matters because airodump can rotate files during longer captures, and the M1-M4 handshake frames may not all land in `-01.cap`.
 
@@ -318,11 +318,13 @@ The SWCLI Crack screen shows elapsed time, tested keys, total keys when known, a
 /attack evil-twin-simple  Open AP with notice/captive portal and metadata logging
 /attack evil-twin-pass    Password-validation portal workflow for authorized labs
 /attack wps               Start WPS Pixie-Dust workflow
-/attack deauth            Start deauth attack workflow
+/attack deauth            Start deauth attack workflow (supports Custom Deauth Rates)
 /help attack              Explain Evil Twin and WPS target selection
 ```
 
 Attack commands require confirmation and appropriate hardware support. In the REPL, Evil Twin and WPS now prefer selecting from the active `/target` or the current `/scan` results before falling back to manual BSSID/channel entry.
+
+**Evil Twin Pass** features an advanced **Captive Portal Engine** with DNS Blackholing, robust OS-level captive portal detection, and several UI variants (e.g., TP-Link, Airtel, Jio, Hotel, Coffee Shop) designed to securely validate passwords against a captured handshake. It fully supports **Multi-Band `[MB]` Evasion Detection**, warning the operator if the target spans multiple channels, and offers continuous deauths with configurable **Packet Rates**.
 
 ### Session
 
@@ -608,7 +610,7 @@ Beacons  Beacon frames seen from the AP.
 #Data    Captured data packets. For WEP, effectively IV count.
 #/s      Recent data packet rate per second.
 CH       AP channel.
-MB       Maximum AP data rate reported by airodump-ng.
+MB       Multi-Band indicator (`[MB]`). Appears if the same ESSID is broadcasting on multiple channels (e.g., 2.4GHz and 5GHz).
 HE       High Efficiency / 802.11ax indicator when detected.
 ENC      Encryption family such as OPN, WEP, WPA, WPA2, WPA3.
 CIPHER   Cipher such as CCMP or TKIP.
