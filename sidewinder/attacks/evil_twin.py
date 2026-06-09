@@ -133,8 +133,8 @@ class EvilTwinEngine:
             handshake_file: Path to .cap file with captured handshake (required for password mode).
         """
         self._validate_network_config()
+        from ..core.errors import SidewinderError, Severity, Category
         if not (1 <= channel <= 14 or 36 <= channel <= 165):
-            from ..core.errors import SidewinderError, Severity, Category
             raise SidewinderError(
                 severity=Severity.ERROR,
                 category=Category.USER,
@@ -142,6 +142,17 @@ class EvilTwinEngine:
                 why=f"Channel {channel} is not a valid 2.4GHz or 5GHz channel.",
                 how_to_fix=["Select a valid channel from the scan results."],
             )
+
+        from ..core.adapter import get_interface_mode
+        for iface in filter(None, [mon_iface, deauth_iface]):
+            if "MOCK" not in iface and get_interface_mode(iface) != "monitor":
+                raise SidewinderError(
+                    severity=Severity.ERROR,
+                    category=Category.RUNTIME,
+                    what=f"Interface '{iface}' is not in monitor mode.",
+                    why="The adapter may have been unplugged or reset by a conflicting service like NetworkManager.",
+                    how_to_fix=[f"Verify {iface} is connected.", f"Run `/monitor start {iface}` to restore monitor mode."],
+                )
 
         async def safe_log(msg: str) -> None:
             if on_log:

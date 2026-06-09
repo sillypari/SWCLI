@@ -396,6 +396,18 @@ async def capture_passive(
     ifaces = mon_iface if isinstance(mon_iface, tuple) else (mon_iface,)
     channels = channel if isinstance(channel, tuple) else (channel,)
     
+    from sidewinder.core.adapter import get_interface_mode
+    from sidewinder.core.errors import SidewinderError, Severity, Category
+    for iface in ifaces:
+        if "MOCK" not in iface and get_interface_mode(iface) != "monitor":
+            raise SidewinderError(
+                severity=Severity.ERROR,
+                category=Category.RUNTIME,
+                what=f"Interface '{iface}' is not in monitor mode.",
+                why="The adapter may have been unplugged or reset by a conflicting service like NetworkManager.",
+                how_to_fix=[f"Verify {iface} is connected.", f"Run `/monitor start {iface}` to restore monitor mode."],
+            )
+
     pcap_file = f"{output_prefix}-01.cap"
 
     if "MOCK" in ifaces[0]:
@@ -494,6 +506,19 @@ async def capture_deauth(
         mgr: Optional SubprocessManager instance
     """
     _mgr = mgr or get_manager()
+    ifaces = mon_iface if isinstance(mon_iface, tuple) else (mon_iface,)
+    
+    from sidewinder.core.adapter import get_interface_mode
+    from sidewinder.core.errors import SidewinderError, Severity, Category
+    for iface in ifaces:
+        if "MOCK" not in iface and get_interface_mode(iface) != "monitor":
+            raise SidewinderError(
+                severity=Severity.ERROR,
+                category=Category.RUNTIME,
+                what=f"Interface '{iface}' is not in monitor mode.",
+                why="The adapter may have been unplugged or reset by a conflicting service like NetworkManager.",
+                how_to_fix=[f"Verify {iface} is connected.", f"Run `/monitor start {iface}` to restore monitor mode."],
+            )
 
     # Start capture first (channel is explicit — no race condition)
     capture_task = asyncio.create_task(
