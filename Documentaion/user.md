@@ -161,7 +161,9 @@ Once you've retrieved the password, restore your system back to normal.
 ### Attack
 | Command | Description |
 |---------|-------------|
-| `/attack evil-twin` | Create Evil Twin AP |
+| `/attack evil-twin` | Alias for Evil Twin Simple open AP + logging |
+| `/attack evil-twin-simple` | Open AP with notice/captive portal and metadata logging |
+| `/attack evil-twin-pass` | Password-validation portal workflow for authorized labs |
 | `/attack wps` | WPS Pixie-Dust attack |
 | `/attack deauth` | Deauth attack |
 

@@ -20,6 +20,8 @@ class UISession:
         self.last_channel: int = 0
         self.last_wordlist: str = ""
         self.last_cap_file: str = ""
+        self.last_scan_show_rxq: bool = False
+        self.last_scan_advanced_info: bool = False
         self.scan_results = []
         self.clients = []
         self.selected_target = None

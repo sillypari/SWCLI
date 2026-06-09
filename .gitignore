@@ -40,3 +40,5 @@ htmlcov/
 captures/
 results/
 wordlists/
+swcli-output/
+passwords/

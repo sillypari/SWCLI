@@ -9,6 +9,7 @@ Key design decisions:
   by the first hash token in the .22000 file
 - Progress parsing runs via streaming subprocess output
 - CrackResult.found=False means not in wordlist (not an error)
+- Found passwords are auto-saved to ./swcli-output/passwords/
 """
 from __future__ import annotations
 
@@ -148,14 +149,21 @@ async def crack_aircrack(
     wordlist: str,
     on_progress: Optional[Callable[[CrackProgress], None]] = None,
     mgr: Optional[SubprocessManager] = None,
+    save_to_output: bool = True,
+    essid: str = "",
 ) -> CrackResult:
     """Crack with aircrack-ng (CPU). Streams progress via callback.
+    
+    When a password is found, it is automatically saved to the output folder
+    (./swcli-output/passwords/) unless save_to_output=False.
     
     Args:
         cap_file: Path to .cap capture file
         bssid: Target AP BSSID
         wordlist: Path to wordlist file
         on_progress: Callback called with CrackProgress for each update
+        save_to_output: Whether to save found password to output folder
+        essid: Target AP ESSID (for password file metadata)
     
     Returns:
         CrackResult with found=True and password if cracked
@@ -175,7 +183,7 @@ async def crack_aircrack(
                     current_key="admin123",
                     percent=i * 20.0,
                 ))
-        return CrackResult(
+        result = CrackResult(
             found=True,
             password="mock_password_123",
             method="aircrack",
@@ -183,6 +191,9 @@ async def crack_aircrack(
             keys_tested=1000,
             elapsed_seconds=2.5,
         )
+        if save_to_output:
+            _save_found_password(result.password, bssid, essid, "aircrack", wordlist)
+        return result
 
     cmd = [
         "aircrack-ng",
@@ -201,13 +212,16 @@ async def crack_aircrack(
             if match:
                 password = match.group(1)
                 logger.info("Password found: %s", password)
-                return CrackResult(
+                result = CrackResult(
                     found=True,
                     password=password,
                     method="aircrack",
                     wordlist=wordlist,
                     keys_tested=keys_tested,
                 )
+                if save_to_output:
+                    _save_found_password(password, bssid, essid, "aircrack", wordlist)
+                return result
         # Parse progress
         progress = _parse_aircrack_line(line)
         if progress:
@@ -228,8 +242,14 @@ async def crack_hashcat(
     wordlist: str,
     on_progress: Optional[Callable[[CrackProgress], None]] = None,
     mgr: Optional[SubprocessManager] = None,
+    save_to_output: bool = True,
+    bssid: str = "",
+    essid: str = "",
 ) -> CrackResult:
     """Crack with hashcat (GPU). Streams progress via callback.
+    
+    When a password is found, it is automatically saved to the output folder
+    (./swcli-output/passwords/) unless save_to_output=False.
     
     Steps:
     1. Convert .cap to .22000 format using hcxpcapngtool
@@ -240,6 +260,9 @@ async def crack_hashcat(
         cap_file: Path to .cap capture file
         wordlist: Path to wordlist file
         on_progress: Callback called with CrackProgress for each update
+        save_to_output: Whether to save found password to output folder
+        bssid: Target AP BSSID (for password file metadata)
+        essid: Target AP ESSID (for password file metadata)
     """
     _mgr = mgr or get_manager()
     import shutil
@@ -256,7 +279,7 @@ async def crack_hashcat(
                     current_key="admin123",
                     percent=i * 20.0,
                 ))
-        return CrackResult(
+        result = CrackResult(
             found=True,
             password="mock_password_123",
             method="hashcat",
@@ -264,6 +287,9 @@ async def crack_hashcat(
             keys_tested=1000,
             elapsed_seconds=2.5,
         )
+        if save_to_output:
+            _save_found_password(result.password, bssid, essid, "hashcat", wordlist)
+        return result
 
     # Step 1: Convert to hashcat format
     hash_22000 = re.sub(r'\.p?cap$', '.22000', cap_file)
@@ -307,13 +333,16 @@ async def crack_hashcat(
         password = read_hashcat_potfile(hash_22000)
         if password:
             logger.info("Password found via hashcat: %s", password)
-            return CrackResult(
+            result = CrackResult(
                 found=True,
                 password=password,
                 method="hashcat",
                 wordlist=wordlist,
                 keys_tested=keys_tested,
             )
+            if save_to_output:
+                _save_found_password(password, bssid, essid, "hashcat", wordlist)
+            return result
 
     return CrackResult(
         found=False,
@@ -353,6 +382,68 @@ def read_hashcat_potfile(hash_file: str) -> Optional[str]:
             first_line = f.readline().strip()
         if not first_line:
             return None
+        # First field before ':' is the full hash token
+        target_hash = first_line.split(":")[0] if ":" in first_line else first_line
+    except OSError as e:
+        logger.debug("Cannot read hash file: %s", e)
+        return None
+
+    # Search potfile for matching hash
+    try:
+        with open(potfile) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                colon_idx = line.find(":")
+                if colon_idx == -1:
+                    continue
+                pot_hash = line[:colon_idx]
+                pot_pass = line[colon_idx + 1:]
+                if pot_hash == target_hash:
+                    return pot_pass
+    except OSError as e:
+        logger.debug("Cannot read potfile: %s", e)
+
+    return None
+
+
+def _save_found_password(
+    password: str,
+    bssid: str = "",
+    essid: str = "",
+    method: str = "",
+    wordlist: str = "",
+) -> str:
+    """Save a cracked password to the output folder.
+
+    Called automatically when a password is found during cracking.
+    Writes to ./swcli-output/passwords/ directory.
+
+    Args:
+        password: The cracked password.
+        bssid:    Target AP BSSID.
+        essid:    Target AP ESSID.
+        method:   Cracking method used.
+        wordlist: Wordlist used.
+
+    Returns:
+        Path to the saved password file, or empty string on error.
+    """
+    try:
+        from .paths import save_password
+        path = save_password(
+            password=password,
+            bssid=bssid,
+            essid=essid,
+            method=method,
+            wordlist=wordlist,
+        )
+        logger.info("Password saved to: %s", path)
+        return path
+    except Exception as e:
+        logger.error("Failed to save password to output: %s", e)
+        return ""
         # First field before ':' is the full hash token
         target_hash = first_line.split(":")[0] if ":" in first_line else first_line
     except OSError as e:

@@ -245,6 +245,20 @@ class CommandPalette:
         elif self.mode == "search":
             title += f" / Search: {self.filter_text}"
 
+        try:
+            from sidewinder.core.adapter import list_interfaces, get_interface_mode
+            ifaces = list_interfaces()
+            iface_status = []
+            for i in ifaces:
+                mode = get_interface_mode(i)
+                color = self.GOOD if mode == "monitor" else self.BAD
+                iface_status.append(f"{self.RESET}{i}: {color}Mon{self.TITLE}")
+            
+            if iface_status:
+                title += f"  {self.MUTED}|{self.TITLE}  " + f"  {self.MUTED}|{self.TITLE}  ".join(iface_status)
+        except Exception:
+            pass
+
         left_width = min(56, max(36, width // 2))
         detail_width = max(30, width - left_width - 7)
         page, max_page, visible = self._visible_window()

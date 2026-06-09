@@ -7,7 +7,7 @@ from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_text, prompt_mac, prompt_confirm, prompt_choice
 from swcli.repl.session_ui import auto_fill_prompt
 from sidewinder.core.cracker import crack_aircrack, crack_hashcat, find_wordlists, CrackProgress
-from sidewinder.core.paths import output_root
+from sidewinder.core.paths import output_root, passwords_dir
 from rich.live import Live
 from swcli.repl.renderer import (
     build_aircrack_status_panel,
@@ -15,6 +15,7 @@ from swcli.repl.renderer import (
     print_success,
     print_error,
     print_table,
+    print_info,
 )
 
 def _get_cap_file(repl) -> str:
@@ -179,11 +180,17 @@ async def cmd_crack_aircrack(repl):
         print_error(f"Wordlist not found or is a directory: {wordlist}")
         return
     
+    # Get ESSID from session target if available
+    essid = ""
+    if hasattr(repl.session, "selected_target") and repl.session.selected_target:
+        essid = repl.session.selected_target.essid
+
     repl.session.last_wordlist = wordlist
-    conf = prompt_confirm("Start Aircrack-ng?")
+    conf = prompt_confirm("Start SWCLI Crack?")
     if conf.cancelled or not conf.value: return
     
-    repl.print("\n [dim]Counting wordlist and initializing Aircrack-ng...[/dim]")
+    repl.print("\n [dim]Counting wordlist and initializing SWCLI Crack...[/dim]")
+    repl.print(f" [dim]Passwords will be saved to: {passwords_dir()}[/dim]")
     start_time = time.monotonic()
     total_keys = _count_wordlist_entries(wordlist)
     state = {
@@ -203,7 +210,7 @@ async def cmd_crack_aircrack(repl):
     }
     activity_frames = ("|", "/", "-", "\\")
     done = False
-    render = _create_crack_render("Aircrack-ng", cap_file, bssid_res.value, wordlist, state, start_time)
+    render = _create_crack_render("aircrack-ng engine", cap_file, bssid_res.value, wordlist, state, start_time)
 
     async def animate(live):
         idx = 0
@@ -232,7 +239,14 @@ async def cmd_crack_aircrack(repl):
                 live.update(render(), refresh=True)
 
             try:
-                res = await crack_aircrack(cap_file, bssid_res.value, wordlist, on_progress=on_progress)
+                res = await crack_aircrack(
+                    cap_file,
+                    bssid_res.value,
+                    wordlist,
+                    on_progress=on_progress,
+                    save_to_output=True,
+                    essid=essid,
+                )
             finally:
                 done = True
                 anim_task.cancel()
@@ -247,6 +261,7 @@ async def cmd_crack_aircrack(repl):
             live.update(render(), refresh=True)
         if res.found:
             print_success(f"KEY FOUND! [ [bold bright_green]{res.password}[/bold bright_green] ]")
+            print_info(f"Password saved to: [cyan]{passwords_dir()}[/cyan]")
             repl.session.add_password(bssid_res.value, res.password) if hasattr(repl.session, "add_password") else None
             repl.session.cracked_passwords.append(res)
         else:
@@ -268,11 +283,19 @@ async def cmd_crack_hashcat(repl):
         print_error(f"Wordlist not found or is a directory: {wordlist}")
         return
     
+    # Get BSSID and ESSID from session target if available
+    bssid = ""
+    essid = ""
+    if hasattr(repl.session, "selected_target") and repl.session.selected_target:
+        bssid = repl.session.selected_target.bssid
+        essid = repl.session.selected_target.essid
+
     repl.session.last_wordlist = wordlist
     conf = prompt_confirm("Start Hashcat (Requires hcxpcapngtool)?")
     if conf.cancelled or not conf.value: return
     
     repl.print("\n [dim]Counting wordlist, converting to hashcat format, and initializing...[/dim]")
+    repl.print(f" [dim]Passwords will be saved to: {passwords_dir()}[/dim]")
     start_time = time.monotonic()
     total_keys = _count_wordlist_entries(wordlist)
     state = {
@@ -292,7 +315,7 @@ async def cmd_crack_hashcat(repl):
     }
     activity_frames = ("|", "/", "-", "\\")
     done = False
-    render = _create_crack_render("Hashcat", cap_file, "auto", wordlist, state, start_time)
+    render = _create_crack_render("Hashcat", cap_file, bssid or "auto", wordlist, state, start_time)
 
     async def animate(live):
         idx = 0
@@ -321,7 +344,14 @@ async def cmd_crack_hashcat(repl):
                 live.update(render(), refresh=True)
 
             try:
-                res = await crack_hashcat(cap_file, wordlist, on_progress=on_progress)
+                res = await crack_hashcat(
+                    cap_file,
+                    wordlist,
+                    on_progress=on_progress,
+                    save_to_output=True,
+                    bssid=bssid,
+                    essid=essid,
+                )
             finally:
                 done = True
                 anim_task.cancel()
@@ -337,6 +367,7 @@ async def cmd_crack_hashcat(repl):
         repl.session.cracked_passwords.append(res)
         if res.found:
             print_success(f"KEY FOUND! [ [bold bright_green]{res.password}[/bold bright_green] ]")
+            print_info(f"Password saved to: [cyan]{passwords_dir()}[/cyan]")
         else:
             print_error("Password not found in wordlist.")
     except Exception as e:
@@ -344,5 +375,5 @@ async def cmd_crack_hashcat(repl):
 
 def register_commands(palette: CommandPalette):
     palette.register(Command("/wordlists", "List available wordlists", "Crack", cmd_wordlists, requires_root=False))
-    palette.register(Command("/crack aircrack", "Crack with aircrack-ng", "Crack", cmd_crack_aircrack, requires_root=False))
+    palette.register(Command("/crack aircrack", "SWCLI Crack CPU engine", "Crack", cmd_crack_aircrack, requires_root=False))
     palette.register(Command("/crack hashcat", "Crack with hashcat", "Crack", cmd_crack_hashcat, requires_root=False))

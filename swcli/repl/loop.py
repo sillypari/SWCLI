@@ -63,7 +63,12 @@ class SwcliREPL:
             self.print("[red]This command requires root. Run: sudo swcli[/red]")
             return
         from swcli.repl.error_handler import safe_execute
-        await safe_execute(self, cmd.handler)
+        previous_context = self.context
+        self.context = "prompt"
+        try:
+            await safe_execute(self, cmd.handler)
+        finally:
+            self.context = "main" if self.running else previous_context
 
     def find_command(self, name: str):
         name = name.strip()

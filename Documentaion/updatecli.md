@@ -50,7 +50,7 @@ swcli/
 │       ├── monitor.py    # /monitor, /monitor stop
 │       ├── scan.py       # /scan, /scan results
 │       ├── capture.py    # /capture passive/deauth/pmid, /validate
-│       ├── attack.py     # /attack evil-twin, /attack wps
+│       ├── attack.py     # /attack evil-twin-simple/pass, /attack wps
 │       ├── crack.py      # /crack aircrack/hashcat, /wordlists
 │       ├── cleanup.py    # /cleanup, /cleanup procs, /cleanup files
 │       ├── session.py    # /session save/load/list
@@ -440,9 +440,17 @@ def build_command_list() -> list[Command]:
         # ── Attack ──
         Command(
             name="/attack evil-twin",
-            description="Evil Twin AP",
+            description="Evil Twin Simple AP + logging",
             category="Attack",
-            handler=cmd_evil_twin,
+            handler=cmd_evil_twin_simple,
+            requires_iface=True,
+            requires_root=True,
+        ),
+        Command(
+            name="/attack evil-twin-pass",
+            description="Evil Twin password-validation portal",
+            category="Attack",
+            handler=cmd_evil_twin_pass,
             requires_iface=True,
             requires_root=True,
         ),

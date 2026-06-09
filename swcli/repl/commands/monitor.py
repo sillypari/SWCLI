@@ -7,9 +7,18 @@ from swcli.repl.renderer import print_success, print_error, print_info
 async def cmd_monitor_start(repl):
     manager = AdapterManager()
     adapters = await manager.discover()
-    monitor_capable = [a for a in adapters if a.monitor_capable]
+    active_monitor = [a for a in adapters if a.current_mode == "monitor"]
+    monitor_capable = [a for a in adapters if a.monitor_capable and a.current_mode != "monitor"]
 
     if not monitor_capable:
+        if active_monitor:
+            iface = active_monitor[0]
+            repl.session.monitor_mode = True
+            repl.session.monitor_iface = iface.iface
+            repl.session.last_iface = iface.iface
+            repl.print(f"[yellow]Monitor mode is already active on {iface.iface}.[/yellow]")
+            repl.print("[dim]Use /monitor stop to restore managed mode.[/dim]")
+            return
         repl.print("[red]No monitor-capable adapters found.[/red]")
         return
 

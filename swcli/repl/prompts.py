@@ -10,6 +10,31 @@ else:
     import tty
     import termios
 
+def _ensure_cooked_stdin() -> None:
+    """Put stdin back into normal line-input mode before using input()."""
+    if os.name == 'nt' or not sys.stdin.isatty():
+        return
+    fd = sys.stdin.fileno()
+    try:
+        settings = termios.tcgetattr(fd)
+    except termios.error:
+        return
+
+    settings[0] |= getattr(termios, "ICRNL", 0)
+    settings[1] |= getattr(termios, "OPOST", 0)
+    settings[3] |= (
+        getattr(termios, "ECHO", 0)
+        | getattr(termios, "ICANON", 0)
+        | getattr(termios, "ISIG", 0)
+        | getattr(termios, "IEXTEN", 0)
+    )
+    try:
+        settings[6][termios.VMIN] = 1
+        settings[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSAFLUSH, settings)
+    except termios.error:
+        return
+
 def read_key() -> str:
     if os.name == 'nt':
         ch = msvcrt.getch()
@@ -51,6 +76,7 @@ def read_key() -> str:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 def read_line(prompt: str, default: str = "") -> str:
+    _ensure_cooked_stdin()
     if default:
         display = f"  {prompt} [{default}]: "
     else:

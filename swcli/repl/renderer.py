@@ -148,11 +148,21 @@ def build_handshake_progress_panel(
     summary = Table.grid(padding=(0, 2))
     summary.add_column(style="cyan")
     summary.add_column(style="white")
-    summary.add_row("Interface", iface)
+    
+    if isinstance(iface, tuple) and isinstance(channel, tuple):
+        iface_disp = f"[green]{iface[0]}[/green] (CH{channel[0]}), [green]{iface[1]}[/green] (CH{channel[1]})"
+        ch_disp = f"{channel[0]}, {channel[1]}"
+        frames_disp = f"{count} packets via {iface[0]} AND {iface[1]}"
+    else:
+        iface_disp = iface if isinstance(iface, str) else ", ".join(iface)
+        ch_disp = str(channel) if isinstance(channel, int) or isinstance(channel, str) else ", ".join(str(c) for c in channel)
+        frames_disp = str(count)
+
+    summary.add_row("Interface", iface_disp)
     summary.add_row("Target", bssid)
     summary.add_row("Client", "broadcast" if client.upper() == "FF:FF:FF:FF:FF:FF" else client)
-    summary.add_row("Channel", str(channel))
-    summary.add_row("Deauth frames", str(count))
+    summary.add_row("Channel", ch_disp)
+    summary.add_row("Deauth frames", frames_disp)
     summary.add_row("Elapsed", _fmt_hms(elapsed))
     if activity:
         detail = f"{activity} waiting for EAPOL"
@@ -217,48 +227,67 @@ def build_aircrack_status_panel(
     actual_percent = percent
     if actual_percent <= 0 and total > 0:
         actual_percent = min(100.0, (tested / total) * 100.0)
+    actual_percent = max(0.0, min(100.0, actual_percent))
 
     speed = keys_per_second / 1000.0
     eta = eta_text or (_fmt_hms(eta_seconds) if eta_seconds > 0 else "unknown")
     passphrase = current_key or "waiting..."
+    total_display = f"{total:,}" if total else "?"
+    tested_display = f"{tested:,}"
 
-    body = Text(justify="center")
-    body.append(f"{method}\n\n", style="bold white")
-    body.append(
-        f"[{_fmt_hms(elapsed)}]  {tested}/{total or '?'} keys tested ({speed:,.2f} K/s)\n\n",
-        style="white",
-    )
-    body.append("Time left: ", style="white")
-    body.append(eta, style="white")
-    body.append(f"{actual_percent:>28.2f}%\n\n", style="white")
-    body.append("Current passphrase: ", style="white")
-    body.append(f"{passphrase}\n\n", style="white")
+    bar_width = 44
+    filled = int((actual_percent / 100.0) * bar_width)
+    if actual_percent > 0 and filled == 0:
+        filled = 1
+    progress_bar = "[" + ("=" * filled) + ("-" * (bar_width - filled)) + "]"
 
+    header = Table.grid(expand=True)
+    header.add_column(ratio=2)
+    header.add_column(justify="right")
+    title = Text()
+    title.append("SWCLI Crack", style="bold bright_cyan")
+    title.append(f"\n{method}", style="dim")
+    state = Text()
+    state_style = "green bold" if found_password else "red bold" if status in ("exhausted", "failed", "error") else "yellow bold"
+    state.append(status.upper(), style=state_style)
+    state.append(f"\n{_fmt_hms(elapsed)}", style="dim")
+    header.add_row(title, state)
+
+    progress = Text()
+    progress.append(progress_bar, style="bold bright_green" if found_password else "cyan")
+    progress.append(f"  {actual_percent:6.2f}%", style="bold white")
+
+    stats = Table.grid(padding=(0, 2))
+    stats.add_column(style="cyan", no_wrap=True)
+    stats.add_column(style="white")
+    stats.add_column(style="cyan", no_wrap=True)
+    stats.add_column(style="white")
+    stats.add_row("Keys", f"{tested_display} / {total_display}", "Speed", f"{speed:,.2f} K/s")
+    stats.add_row("ETA", eta, "BSSID", bssid or "auto")
+    stats.add_row("Capture", cap_file, "Wordlist", wordlist)
+    stats.add_row("Current", passphrase, "Activity", activity or "running")
+
+    key_table = Table.grid(padding=(0, 2))
+    key_table.add_column(style="cyan", no_wrap=True)
+    key_table.add_column(style="white")
+    key_table.add_row("Master Key", master_key or "--")
+    key_table.add_row("Transient Key", transient_key or "--")
+    key_table.add_row("EAPOL HMAC", eapol_hmac or "--")
+
+    result = Text(justify="center")
     if found_password:
-        body.append("KEY FOUND! [ ", style="green bold")
-        body.append(found_password, style="bright_green bold")
-        body.append(" ]\n\n", style="green bold")
+        result.append("KEY FOUND  [ ", style="green bold")
+        result.append(found_password, style="bright_green bold")
+        result.append(" ]", style="green bold")
     elif status in ("exhausted", "failed", "error"):
-        body.append(f"{status.upper()}\n\n", style="red bold")
-
-    def append_key(label: str, value: str) -> None:
-        body.append(f"{label:<16}: ", style="white")
-        body.append((value or "--") + "\n\n", style="white")
-
-    append_key("Master Key", master_key)
-    append_key("Transient Key", transient_key)
-    append_key("EAPOL HMAC", eapol_hmac)
-
-    footer = Text(justify="center")
-    if found_password:
-        footer.append("Crack complete", style="green")
+        result.append(status.upper(), style="red bold")
     else:
-        if activity:
-            footer.append(f"{activity} ", style="cyan bold")
-        footer.append("Trying passphrases...", style="dim")
+        result.append("Trying passphrases", style="dim")
 
     return Panel(
-        Align.center(Group(body, footer), vertical="top"),
-        border_style="bright_black",
-        padding=(1, 3),
+        Group(header, Text(""), progress, Text(""), stats, Text(""), key_table, Text(""), result),
+        title="SWCLI Crack",
+        border_style="bright_cyan",
+        box=box.ROUNDED,
+        padding=(1, 2),
     )

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from typing import Any, Optional
 
@@ -26,6 +26,8 @@ class Network:
         auth:           Authentication method (e.g. 'PSK').
         essid:          Network name (may be empty for hidden networks).
         wps:            Whether WPS is advertised.
+        manuf:          Access point manufacturer from OUI lookup.
+        rxq:            Receive quality, only meaningful for fixed-channel scans.
         beacons:        Beacon frame count seen.
         data_packets:   Data packet count seen.
         first_seen:     ISO timestamp of first observation.
@@ -40,6 +42,7 @@ class Network:
     auth: str
     essid: str
     speed: int = 0
+    rxq: int = -1
     wps: bool = False
     beacons: int = 0
     data_packets: int = 0
@@ -64,7 +67,12 @@ class Client:
         bssid:      Associated AP BSSID.
         signal:     RSSI signal strength in dBm.
         packets:    Number of data packets observed.
+        frames:     Airodump client frame count.
+        rate_to:    AP-to-client data rate in Mbit/s.
+        rate_from:  Client-to-AP data rate in Mbit/s.
+        lost:       Estimated missed packets from the client.
         probe:      Probe request SSID (if any).
+        manuf:      Client manufacturer from OUI lookup.
         first_seen: ISO timestamp of first observation.
         last_seen:  ISO timestamp of most recent observation.
     """
@@ -73,12 +81,29 @@ class Client:
     bssid: str
     signal: int = 0
     packets: int = 0
+    frames: int = 0
+    rate_to: int = -1
+    rate_from: int = -1
+    lost: int = 0
     probe: str = ""
     manuf: str = ""
     he: bool = False
     eapol: bool = False
     first_seen: int = 0
     last_seen: int = 0
+
+
+def _coerce_dataclass_payload(cls: type, payload: dict[str, Any]) -> dict[str, Any]:
+    data = dict(payload)
+    if "manufacturer" in data and "manuf" not in data:
+        data["manuf"] = data["manufacturer"]
+    if cls is Client:
+        if "frames" not in data and "packets" in data:
+            data["frames"] = data["packets"]
+        elif "packets" not in data and "frames" in data:
+            data["packets"] = data["frames"]
+    allowed = {f.name for f in fields(cls)}
+    return {key: value for key, value in data.items() if key in allowed}
 
 
 @dataclass
@@ -220,13 +245,13 @@ class Session:
 
         # Deserialize nested dataclasses manually
         data["scan_results"] = [
-            Network(**n) for n in data.get("scan_results", [])
+            Network(**_coerce_dataclass_payload(Network, n)) for n in data.get("scan_results", [])
         ]
         data["clients"] = [
-            Client(**c) for c in data.get("clients", [])
+            Client(**_coerce_dataclass_payload(Client, c)) for c in data.get("clients", [])
         ]
         if data.get("selected_target"):
-            data["selected_target"] = Network(**data["selected_target"])
+            data["selected_target"] = Network(**_coerce_dataclass_payload(Network, data["selected_target"]))
         else:
             data["selected_target"] = None
         if data.get("handshake"):

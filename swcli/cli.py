@@ -235,9 +235,9 @@ async def handle_scan(args):
         engine = ScanEngine()
         nets = engine.get_networks()
         print(f"Scan results (saved to session):\n")
-        print(f"{'#':<3} {'BSSID':<18} {'CH':<3} {'Signal':<7} {'Privacy':<8} {'ESSID':<20} {'WPS'}")
+        print(f"{'#':<3} {'BSSID':<18} {'Manufacturer':<18} {'CH':<3} {'Signal':<7} {'Privacy':<8} {'ESSID':<20} {'WPS'}")
         for i, n in enumerate(nets, 1):
-            print(f"{i:<3} {n.bssid:<18} {n.channel:<3} {n.signal:<7} {n.privacy:<8} {n.display_name():<20} {'Yes' if n.wps else 'No'}")
+            print(f"{i:<3} {n.bssid:<18} {(n.manuf or '-'):<18} {n.channel:<3} {n.signal:<7} {n.privacy:<8} {n.display_name():<20} {'Yes' if n.wps else 'No'}")
         return
 
     if not args.mon:
@@ -256,13 +256,22 @@ async def handle_scan(args):
         
     engine = ScanEngine()
     channels = [int(c) for c in args.channels.split(",")] if args.channels else None
+    scan_config = SidewinderConfig.load()
+    advanced_info = scan_config.advanced_scan_info or os.environ.get("SWCLI_ADVANCED_SCAN_INFO", "").lower() in ("1", "true", "yes")
+    write_capture = scan_config.keep_scan_captures or os.environ.get("SWCLI_KEEP_SCAN_CAP", "").lower() in ("1", "true", "yes")
     
     print_info("Starting background scan... Press Ctrl+C to stop.")
     def on_network(net):
-        print(f"[NET] {net.bssid} | PWR: {net.signal} | CH: {net.channel} | ESSID: {net.display_name()}")
+        rxq = f" | RXQ: {net.rxq}" if engine.show_rxq else ""
+        print(f"[NET] {net.bssid} | MANUF: {net.manuf or '-'}{rxq} | PWR: {net.signal} | CH: {net.channel} | ESSID: {net.display_name()}")
         
     def on_client(cli):
-        print(f"[CLI] {cli.mac} -> {cli.bssid} | PWR: {cli.signal} | PROBE: {cli.probe}")
+        if advanced_info:
+            frames = cli.frames or cli.packets
+            details = f" | RATE: {cli.rate_to}/{cli.rate_from} | LOST: {cli.lost} | FRAMES: {frames}"
+        else:
+            details = ""
+        print(f"[CLI] {cli.mac} | MANUF: {cli.manuf or '-'} -> {cli.bssid} | PWR: {cli.signal}{details} | PROBE: {cli.probe}")
         
     try:
         await engine.scan(
@@ -270,6 +279,8 @@ async def handle_scan(args):
             capture_prefix=scan_prefix(),
             band=args.band,
             channels=channels,
+            write_capture=write_capture,
+            advanced_info=advanced_info,
             on_network=on_network,
             on_client=on_client
         )
@@ -390,11 +401,25 @@ async def handle_attack(args):
         print("\nWARNING: This creates a rogue Access Point.")
         if not confirm_action("Start Evil Twin?"): return
         
-        engine = EvilTwinEngine()
-        cfg = AttackConfig(target_bssid=args.bssid or "00:00:00:00:00:00", channel=args.ch)
+        engine = EvilTwinEngine(
+            tap_iface=args.tap_iface,
+            gateway_ip=args.gateway_ip,
+            cidr_prefix=args.cidr_prefix,
+            dhcp_start=args.dhcp_start,
+            dhcp_end=args.dhcp_end,
+            portal_port=args.portal_port,
+        )
         print_info("Starting Evil Twin engine... Press Ctrl+C to stop.")
         try:
-            await engine.start(cfg, mon_iface=args.mon, essid=args.essid)
+            await engine.start_rogue_ap(
+                mon_iface=args.mon,
+                essid=args.essid,
+                channel=args.ch,
+                target_bssid=args.bssid,
+                portal_mode=args.portal_mode,
+                portal_title=args.portal_title or args.essid,
+                portal_message=args.portal_message,
+            )
         except KeyboardInterrupt:
             await engine.stop()
             print_info("Evil Twin stopped.")
@@ -434,7 +459,7 @@ async def handle_crack(args):
             print(f"{i:<3} {w:<60} {size:,} bytes")
             
     elif cmd == "aircrack":
-        print("Crack with aircrack-ng:")
+        print("SWCLI Crack:")
         print(f"  Capture:   {args.cap}")
         print(f"  Target:    {args.bssid}")
         print(f"  Wordlist:  {args.wl}")
@@ -443,6 +468,7 @@ async def handle_crack(args):
         res = await crack_aircrack(args.cap, args.bssid, args.wl)
         if res.found:
             print_success(f"KEY FOUND! [ {res.password} ]")
+            print(f"  Password saved to: ./swcli-output/passwords/")
         else:
             print_error("Password not found in wordlist.")
             
@@ -456,6 +482,7 @@ async def handle_crack(args):
         res = await crack_hashcat(args.cap, args.wl)
         if res.found:
             print_success(f"PASSWORD FOUND! [ {res.password} ]")
+            print(f"  Password saved to: ./swcli-output/passwords/")
         else:
             print_error("Password not found in wordlist.")
 
@@ -626,6 +653,15 @@ def main():
     a_evil.add_argument("essid")
     a_evil.add_argument("ch", type=int)
     a_evil.add_argument("--bssid")
+    a_evil.add_argument("--portal-mode", choices=["none", "notice", "captive"], default="notice")
+    a_evil.add_argument("--portal-title", default="")
+    a_evil.add_argument("--portal-message", default="Authorized wireless connectivity test. No credentials are collected.")
+    a_evil.add_argument("--tap-iface", default="at0")
+    a_evil.add_argument("--gateway-ip", default="10.0.0.1")
+    a_evil.add_argument("--cidr-prefix", type=int, default=24)
+    a_evil.add_argument("--dhcp-start", default="10.0.0.10")
+    a_evil.add_argument("--dhcp-end", default="10.0.0.100")
+    a_evil.add_argument("--portal-port", type=int, default=80)
     
     a_wps = a_subs.add_parser("wps", help="WPS Pixie-Dust")
     a_wps.add_argument("mon")
@@ -638,7 +674,7 @@ def main():
     p_crack = subparsers.add_parser("crack", help="Crack capture")
     cr_subs = p_crack.add_subparsers(dest="crack_cmd", required=True)
     
-    cr_air = cr_subs.add_parser("aircrack", help="Crack with aircrack-ng")
+    cr_air = cr_subs.add_parser("aircrack", help="SWCLI Crack CPU engine")
     cr_air.add_argument("cap")
     cr_air.add_argument("--bssid", required=True)
     cr_air.add_argument("--wordlist", dest="wl", required=True)

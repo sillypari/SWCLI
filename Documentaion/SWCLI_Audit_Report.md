@@ -123,7 +123,7 @@ KNOWN_DEVICES = {
     (0x148F, 0x7601): {"name": "MT7601U",  "bands": ["2.4G"],        "monitor": True,  "injection": False},
     (0x2357, 0x0120): {"name": "RTL8821AU","bands": ["2.4G", "5G"],  "monitor": True,  "injection": True},
     (0x0BDA, 0x8812): {"name": "RTL8812AU","bands": ["2.4G", "5G"],  "monitor": True,  "injection": True},
-    (0x14C3, 0x7902): {"name": "MT7902",   "bands": ["2.4G","5G","6G"],"monitor": False,"injection": False},
+    (0x14C3, 0x7902): {"name": "MT7902",   "bands": ["2.4G","5G","6G"],"monitor": True,"injection": True},
 }
 ```
 
@@ -273,7 +273,7 @@ SWCLI/
 │   │   ├── base.py               # Adapter ABC, CARD_SETTINGS
 │   │   ├── rt5370.py             # RT5370 adapter
 │   │   ├── rtl8821au.py          # RTL8821AU adapter
-│   │   └── mt7902.py             # MT7902 adapter (protection)
+│   │   └── mt7902.py             # MT7902 adapter profile
 │   ├── attacks/
 │   │   ├── __init__.py
 │   │   ├── deauth.py             # DeauthConfig, DeauthResult, run_deauth

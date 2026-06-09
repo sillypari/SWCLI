@@ -224,7 +224,9 @@ Palette controls:
 
 | Command | Purpose |
 | --- | --- |
-| `/attack evil-twin` | Start guided Evil Twin workflow |
+| `/attack evil-twin` | Alias for Evil Twin Simple open AP + logging |
+| `/attack evil-twin-simple` | Start open AP with notice/captive portal and metadata logging |
+| `/attack evil-twin-pass` | Start password-validation portal workflow for authorized labs |
 | `/attack wps` | Start guided WPS Pixie-Dust workflow |
 | `/attack deauth` | Start guided deauth workflow |
 | `/help attack` | Explain attack workflows |

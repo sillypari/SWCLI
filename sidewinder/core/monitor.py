@@ -25,6 +25,15 @@ ARPHRD_IEEE80211_RADIOTAP = "803"
 ARPHRD_ETHER = "1"
 
 
+def infer_base_iface(mon_iface: str) -> str:
+    """Infer a managed interface from a standard '<iface>mon' monitor VIF."""
+    if mon_iface.endswith("mon") and len(mon_iface) > 3:
+        base = mon_iface[:-3]
+        if Path(f"/sys/class/net/{base}").exists():
+            return base
+    return ""
+
+
 async def set_link(iface: str, state: str) -> None:
     """Bring interface up or down.
 
@@ -57,6 +66,9 @@ async def enter_monitor_mode(
         Monitor interface name (e.g., "wlan0mon" or same iface for bad driver)
     """
     logger.info("Entering monitor mode: %s (phy=%s, ch=%d)", iface, phy, channel)
+    if get_interface_mode_sync(iface) == "monitor":
+        logger.info("Interface %s is already in monitor mode", iface)
+        return iface
 
     # Try standard path first (creates new VIF)
     try:
@@ -158,8 +170,9 @@ async def exit_monitor_mode(
         iface: Managed interface to restore (e.g., "wlan0"). If empty, uses mon_iface.
         phy: PHY name for VIF recreation (e.g., "phy0"). If empty, best-effort.
     """
-    # If iface not provided, assume bad driver path (mon_iface == iface)
-    restore_iface = iface or mon_iface
+    # If iface is not provided, recover the standard '<iface>mon' VIF case.
+    # This matters after REPL/session loss where only 'wlo1mon' may be known.
+    restore_iface = iface or infer_base_iface(mon_iface) or mon_iface
     is_bad_driver_path = (mon_iface == restore_iface)
     logger.info("Exiting monitor mode: %s -> %s (bad_driver=%s)", mon_iface, restore_iface, is_bad_driver_path)
 
@@ -174,7 +187,7 @@ async def exit_monitor_mode(
     if is_bad_driver_path:
         # Bad driver path: change type in-place
         await run(["iw", "dev", restore_iface, "set", "type", "managed"], check=False)
-    else:
+    elif phy and not Path(f"/sys/class/net/{restore_iface}").exists():
         # Standard path: recreate station VIF
         try:
             await run(["iw", "phy", phy, "interface", "add", restore_iface, "type", "station"])

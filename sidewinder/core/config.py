@@ -24,6 +24,9 @@ class SidewinderConfig:
     default_wordlist: str = "/usr/share/wordlists/rockyou.txt"
     default_channel: int = 1
     default_deauth_count: int = 10
+    advanced_scan_info: bool = False
+    keep_scan_captures: bool = False
+    save_captures_without_eapol: bool = False
     
     # Timeouts
     capture_timeout_seconds: float = 300.0
@@ -35,6 +38,7 @@ class SidewinderConfig:
 
     # Themes
     theme: str = "midnight"
+    scan_color_mode: str = "airodump"
     theme_directory: str = "~/.sidewinder/themes"
     load_user_themes: bool = True
     load_builtin_themes: bool = True

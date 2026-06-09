@@ -118,13 +118,13 @@ SCAN: /sys/class/net/*/phy80211
 FOR EACH wireless interface:
     Read: phy, driver, bus, mac, vid, pid, mode, is_up
     Lookup in KNOWN_DEVICES registry
-    Classify: OPTIMIZED / WORKING / LIMITED / EMERGENCY
+    Classify: OPTIMIZED / WORKING / LIMITED
 
 OUTPUT:
   #   Interface          Chipset     Driver      Bus   Mode     Bands    Monitor  Inject  Status
   1   wlx5c628b765de2    RTL8821AU   rtw88       usb   managed  2.4/5G   YES      YES     OPTIMIZED
   2   wlx001ea6c65744    RT5370      rt2800usb   usb   monitor  2.4G     YES      YES     WORKING
-  3   wlo1               MT7902      mt7921e     pci   managed  2.4/5G   YES      YES     EMERGENCY
+  3   wlo1               MT7902      mt7921e     pci   managed  2.4/5G   YES      YES     OPTIMIZED
 
   Total: 3 adapters found
   Use: swcli monitor <interface> to enter monitor mode
@@ -497,7 +497,7 @@ CONFIRM:
     Start deauth attack? [y/N]:
 
 STEPS:
-  1. CHECK adapter injection (refuse if MT7902)
+  1. CHECK adapter injection capability
   2. SET channel: iw dev {mon_iface} set channel 6
   3. START passive capture (background task)
   4. WAIT 1s
@@ -724,7 +724,7 @@ OUTPUT:
   Use: swcli crack aircrack <cap> --wordlist <path>
 ```
 
-### 6.2 Aircrack-ng Crack (CPU)
+### 6.2 SWCLI Crack (CPU)
 
 ```
 swcli crack aircrack <cap_file> --bssid <bssid> --wordlist <wordlist_path>
@@ -738,7 +738,7 @@ EXAMPLE:
   swcli crack aircrack /tmp/sidewinder_cap-01.cap --bssid AA:BB:CC:DD:EE:01 --wordlist /usr/share/wordlists/rockyou.txt
 
 CONFIRM:
-  Crack with aircrack-ng:
+  SWCLI Crack:
     Capture:   /tmp/sidewinder_cap-01.cap
     Target:    AA:BB:CC:DD:EE:01
     Wordlist:  /usr/share/wordlists/rockyou.txt
@@ -753,7 +753,7 @@ STEPS:
      DETECT success: "KEY FOUND! [ password ]"
 
 OUTPUT:
-  Cracking with aircrack-ng...
+  Running SWCLI Crack...
   [00:00:05] 1,234 keys tested (5678.90 k/s)
   [00:00:10] 5,678 keys tested (5890.12 k/s)
   ...
@@ -927,7 +927,7 @@ swcli
 │
 ├── CRACK
 │   ├── wordlists            # List available wordlists
-│   ├── crack aircrack <cap> # Crack with aircrack-ng (with confirm)
+│   ├── crack aircrack <cap> # SWCLI Crack CPU engine (with confirm)
 │   └── crack hashcat <cap>  # Crack with hashcat (with confirm)
 │
 ├── CLEANUP

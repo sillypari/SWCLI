@@ -12,6 +12,7 @@ import logging
 import os
 import threading
 import time
+from dataclasses import fields
 from typing import Callable, Optional
 
 from ..core.session import Client, Network
@@ -22,6 +23,20 @@ logger = logging.getLogger(__name__)
 MAX_NETWORKS = 500
 MAX_CLIENTS = 1000
 STALE_TIMEOUT_SECS = 120
+NETWORK_FIELDS = {f.name for f in fields(Network)}
+CLIENT_FIELDS = {f.name for f in fields(Client)}
+PREFERRED_AIRODUMP_NG = os.environ.get("SWCLI_AIRODUMP_NG", "/home/codex/Tools/bin/airodump-ng")
+
+
+def _normalize_scan_record(record: dict, allowed_fields: set[str]) -> dict:
+    normalized = dict(record)
+    if "manufacturer" in normalized and "manuf" not in normalized:
+        normalized["manuf"] = normalized["manufacturer"]
+    return {key: value for key, value in normalized.items() if key in allowed_fields}
+
+
+def _airodump_ng_path() -> str:
+    return PREFERRED_AIRODUMP_NG if os.path.exists(PREFERRED_AIRODUMP_NG) else "airodump-ng"
 
 class ScanEngine:
     """Run airodump-ng and emit discovered networks and clients in real-time via JSON FIFO."""
@@ -38,6 +53,8 @@ class ScanEngine:
         self.eapol_bssids: set[str] = set()
         self._data_rate_prev: dict[str, tuple[int, float]] = {}
         self.current_channel: int = 0
+        self.show_rxq = False
+        self.advanced_info = False
 
         
     async def scan(
@@ -49,6 +66,8 @@ class ScanEngine:
         update_secs: float = 0.1,
         hop_ms: int = 250,
         write_interval_secs: int = 0,
+        write_capture: bool = False,
+        advanced_info: bool = False,
         poll_ms: int = 100,
         on_network: Optional[Callable[[Network], None]] = None,
         on_client: Optional[Callable[[Client], None]] = None,
@@ -56,6 +75,8 @@ class ScanEngine:
     ) -> None:
         
         self.fifo_path = f"{capture_prefix}_fifo.json"
+        self.advanced_info = bool(advanced_info)
+        self.show_rxq = bool(self.advanced_info and channels and len(channels) == 1)
         fifo_path = self.fifo_path
         if hasattr(os, "mkfifo"):
             try:
@@ -64,14 +85,18 @@ class ScanEngine:
                 pass
 
         cmd = [
-            "airodump-ng",
+            _airodump_ng_path(),
             mon_iface,
             "--json", fifo_path,
-            "-w", capture_prefix,
             "-a",
             "--wps",
+            "--manufacturer",
             "-f", str(hop_ms),
         ]
+        if write_capture:
+            cmd.extend(["-w", capture_prefix])
+            if write_interval_secs >= 1:
+                cmd.extend(["--write-interval", str(int(write_interval_secs))])
         if band:
             cmd.extend(["--band", band])
         if channels:
@@ -150,7 +175,7 @@ class ScanEngine:
             seen_clients: set[str] = set()
 
             for n_dict in data.get("networks", []):
-                n = Network(**n_dict)
+                n = Network(**_normalize_scan_record(n_dict, NETWORK_FIELDS))
                 # Skip broadcast/bogus entries
                 if n.bssid == "ff:ff:ff:ff:ff:ff" or n.channel < 1:
                     continue
@@ -169,7 +194,11 @@ class ScanEngine:
                     on_network(n)
                     
             for c_dict in data.get("clients", []):
-                c = Client(**c_dict)
+                c = Client(**_normalize_scan_record(c_dict, CLIENT_FIELDS))
+                if not c.frames and c.packets:
+                    c.frames = c.packets
+                elif c.frames and not c.packets:
+                    c.packets = c.frames
                 if c.bssid == "ff:ff:ff:ff:ff:ff":
                     continue
                 existing = self.clients.get(c.mac)
@@ -265,6 +294,19 @@ class ScanEngine:
                         os.unlink(f)
                     except OSError:
                         pass
+
+    def get_related_networks(self, bssid: str) -> list[Network]:
+        """Get networks sharing the same ESSID as the target BSSID but on different channels."""
+        target = next((net for net in self.networks.values() if net.bssid.upper() == bssid.upper()), None)
+        if not target or not target.essid or target.display_name() in ("[HIDDEN]", "[MANUAL]"):
+            return []
+        
+        target_name = target.display_name().strip()
+        related = []
+        for n in self.networks.values():
+            if n.bssid != target.bssid and n.display_name().strip() == target_name and n.channel != target.channel:
+                related.append(n)
+        return related
 
     def get_networks(self) -> list[Network]:
         """Get all discovered networks, sorted by signal strength."""

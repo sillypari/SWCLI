@@ -1,0 +1,19 @@
+--- sidewinder/core/scanner.py
++++ sidewinder/core/scanner.py
+@@ -296,6 +296,17 @@
+                         pass
+ 
++    def get_related_networks(self, bssid: str) -> list[Network]:
++        """Get networks sharing the same ESSID as the target BSSID but on different channels."""
++        target = self.networks.get(bssid.upper())
++        if not target or not target.essid or target.display_name() in ("[HIDDEN]", "[MANUAL]"):
++            return []
++        
++        related = []
++        for n in self.networks.values():
++            if n.bssid != target.bssid and n.essid == target.essid and n.channel != target.channel:
++                related.append(n)
++        return related
++
+     def get_networks(self) -> list[Network]:
+         """Get all discovered networks, sorted by signal strength."""

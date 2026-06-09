@@ -303,21 +303,23 @@ Capture validation checks rotated airodump output segments together. For example
 
 ```text
 /wordlists        List discovered wordlists
-/crack aircrack   Crack a capture with aircrack-ng
+/crack aircrack   Crack a capture with SWCLI Crack CPU engine
 /crack hashcat    Convert and crack with hashcat
 ```
 
 Common wordlist paths are auto-discovered, including `rockyou.txt` locations and common system wordlists. You can also enter a wordlist path manually.
 
-The Aircrack-ng crack screen follows native aircrack-style progress: elapsed time, tested keys, total keys when known, speed in `K/s`, ETA, percent, current passphrase, and any master key, transient key, or EAPOL HMAC fields printed by aircrack-ng. `/crash` is accepted as an alias for the crack screen.
+The SWCLI Crack screen shows elapsed time, tested keys, total keys when known, a working progress bar, speed in `K/s`, ETA, percent, current passphrase, and any master key, transient key, or EAPOL HMAC fields reported by the cracking engine. `/crash` is accepted as an alias for the crack screen.
 
 ### Attack
 
 ```text
-/attack evil-twin  Start Evil Twin workflow
-/attack wps        Start WPS Pixie-Dust workflow
-/attack deauth     Start deauth attack workflow
-/help attack       Explain Evil Twin and WPS target selection
+/attack evil-twin         Alias for Evil Twin Simple
+/attack evil-twin-simple  Open AP with notice/captive portal and metadata logging
+/attack evil-twin-pass    Password-validation portal workflow for authorized labs
+/attack wps               Start WPS Pixie-Dust workflow
+/attack deauth            Start deauth attack workflow
+/help attack              Explain Evil Twin and WPS target selection
 ```
 
 Attack commands require confirmation and appropriate hardware support. In the REPL, Evil Twin and WPS now prefer selecting from the active `/target` or the current `/scan` results before falling back to manual BSSID/channel entry.
@@ -437,7 +439,7 @@ python3 -m swcli validate ./swcli-output/captures/deauth_YYYYMMDD_HHMMSS-01.cap
 
 ### Crack
 
-Aircrack-ng:
+SWCLI Crack CPU engine:
 
 ```bash
 python3 -m swcli wordlists
@@ -461,10 +463,10 @@ Evil Twin:
 sudo python3 -m swcli
 /scan
 /target
-/attack evil-twin
+/attack evil-twin-simple
 ```
 
-The Evil Twin REPL flow selects a monitor interface, lets you choose a scanned target, pre-fills the ESSID when visible, asks whether to clone the target BSSID, then shows a confirmation plan before starting airbase-ng.
+The Evil Twin Simple REPL flow selects a monitor interface, lets you choose a scanned target, pre-fills the ESSID when visible, checks client-network preflight status, asks whether to clone the target BSSID, then shows a confirmation plan before starting airbase-ng.
 
 WPS:
 
@@ -567,7 +569,7 @@ Requires `hcxdumptool` and `hcxpcapngtool`.
 
 ### Workflow 5: Crack a Capture
 
-Aircrack-ng:
+SWCLI Crack CPU engine:
 
 ```text
 /wordlists
@@ -832,7 +834,7 @@ Validating any one of the matching segment files checks the whole set.
 
 ### Crack Screen Looks Stuck Or Appears In The Wrong Place
 
-The crack UI uses a full-screen Rich live display so progress stays at the top of the terminal while aircrack-ng runs. Aircrack-ng progress is rendered in its native shape: keys tested, ETA, percent, current passphrase, and key material fields when aircrack-ng prints them.
+The crack UI uses a full-screen Rich live display so progress stays at the top of the terminal while SWCLI Crack runs. Progress includes a working bar, keys tested, ETA, percent, current passphrase, and key material fields when the cracking engine prints them.
 
 Speed is displayed as `K/s`. Internally, SWCLI normalizes aircrack-ng speed output so the UI does not show ambiguous `M/s` or raw `keys/s` labels.
 

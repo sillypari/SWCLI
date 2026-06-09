@@ -212,16 +212,6 @@ ERROR_DB: dict[str, SidewinderError] = {
             "  Reboot",
         ],
     ),
-    "MT7902_INJECTION_RUNTIME_RISK": SidewinderError(
-        severity=Severity.WARNING,
-        category=Category.HARDWARE,
-        what="MT7902 injection support depends on the active driver",
-        why="SWCLI allows this adapter, but runtime tools may still fail if the driver rejects injection",
-        how_to_fix=[
-            "Use wlo1/MT7902 only as an emergency fallback",
-            "Prefer RT5370 or RTL8821AU when available",
-        ],
-    ),
     "WORDLIST_NOT_FOUND": SidewinderError(
         severity=Severity.ERROR,
         category=Category.USER,
@@ -345,14 +335,6 @@ ADAPTER_ERRORS: dict[str, dict[str, dict]] = {
         },
     },
     "MT7902": {
-        "INJECTION_RUNTIME_RISK": {
-            "what": "MT7902 injection support depends on the active driver",
-            "why": "SWCLI does not block MT7902, but runtime tools may still fail if the driver rejects injection",
-            "how_to_fix": [
-                "Use wlo1/MT7902 only as an emergency fallback",
-                "Prefer RT5370 or RTL8821AU when available",
-            ],
-        },
         "KERNEL_PANIC": {
             "what": "MT7902 caused kernel panic",
             "why": "Known issue on some ASUS boards with this chipset",

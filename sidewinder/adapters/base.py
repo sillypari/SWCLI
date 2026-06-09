@@ -24,11 +24,11 @@ CARD_SETTINGS: dict[str, dict[str, dict | None]] = {
         "evil_twin":  {"mode": "monitor+AP", "channel": "target"},
     },
     "MT7902": {
-        "scan":    {"mode": "managed"},
-        "capture": {"mode": "monitor", "fallback": True},
-        "deauth":  {"mode": "monitor", "fallback": True, "count": 3},
-        "inject":  {"mode": "monitor", "fallback": True},
-        "evil_twin": {"mode": "monitor+AP", "fallback": True},
+        "scan":       {"mode": "managed", "power_save": "auto"},
+        "capture":    {"mode": "monitor", "flags": "fcsfail otherbss", "band": "auto"},
+        "deauth":     {"mode": "monitor", "flags": "fcsfail otherbss", "count": 10},
+        "inject":     {"mode": "monitor", "flags": "fcsfail otherbss", "rate": "auto"},
+        "evil_twin":  {"mode": "monitor+AP", "channel": "target"},
     },
 }
 

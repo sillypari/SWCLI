@@ -29,12 +29,18 @@ async def cmd_cleanup_procs(repl):
 
 async def cmd_cleanup_files(repl):
     root = output_root()
-    conf = prompt_confirm(f"Delete generated files under {root}?")
+    conf = prompt_confirm(f"Delete generated files under {root} (preserving passwords)?")
     if conf.cancelled or not conf.value: return
     if os.path.isdir(root):
-        shutil.rmtree(root)
-    os.makedirs(root, exist_ok=True)
-    print_success("Generated files deleted.")
+        for item in os.listdir(root):
+            if item == "passwords":
+                continue
+            item_path = os.path.join(root, item)
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+            else:
+                os.remove(item_path)
+    print_success("Generated files deleted (passwords preserved).")
 
 def register_commands(palette: CommandPalette):
     palette.register(Command("/cleanup", "Full cleanup", "System", cmd_cleanup_full))

@@ -4,7 +4,14 @@ import time
 from swcli.repl.palette import Command, CommandPalette
 from swcli.repl.prompts import prompt_text, prompt_mac, prompt_channel, prompt_confirm, prompt_choice
 from swcli.repl.session_ui import auto_fill_prompt
-from sidewinder.core.capture import capture_passive, capture_deauth, validate_handshake, extract_handshake_messages
+from sidewinder.core.capture import (
+    capture_passive,
+    capture_deauth,
+    delete_capture_segments,
+    extract_handshake_messages,
+    validate_handshake,
+)
+from sidewinder.core.config import SidewinderConfig
 from sidewinder.core.paths import capture_prefix
 from sidewinder.attacks.pmkid import PMKIDEngine
 from sidewinder.core.attack import AttackConfig
@@ -17,11 +24,27 @@ from swcli.repl.renderer import (
     print_warning,
 )
 
-def _record_capture_result(repl, cap_file, result):
-    repl.session.last_cap_file = cap_file
-    repl.session.handshake = result
-    if cap_file not in repl.session.captures:
-        repl.session.captures.append(cap_file)
+def _keep_or_delete_capture(repl, cap_file, result):
+    cfg = SidewinderConfig.load()
+    cap_exists = os.path.exists(cap_file)
+    validation = result or (validate_handshake(cap_file) if cap_exists else None)
+    has_eapol = bool(validation and validation.eapol_count)
+
+    if cap_exists and (has_eapol or cfg.save_captures_without_eapol):
+        repl.session.last_cap_file = cap_file
+        if cap_file not in repl.session.captures:
+            repl.session.captures.append(cap_file)
+        if validation:
+            repl.session.handshake = validation
+        return True, validation
+
+    deleted = delete_capture_segments(cap_file)
+    if deleted:
+        print_warning(
+            "No EAPOL detected; generated .cap file was not saved. "
+            "Toggle save_captures_without_eapol in /config set to keep these files."
+        )
+    return False, validation
 
 
 async def _get_capture_params(repl):
@@ -143,6 +166,39 @@ async def _get_deauth_params(repl, default_count=10):
         if ch_res.cancelled: return None
         channel = ch_res.value
 
+    # Check for multi-band target
+    scan_results = getattr(repl.session, "scan_results", [])
+    target_net = next((n for n in scan_results if n.bssid.upper() == bssid.upper()), None)
+    if target_net and target_net.essid and target_net.display_name() not in ("[HIDDEN]", "[MANUAL]"):
+        target_name = target_net.display_name().strip()
+        related = [n for n in scan_results if n.bssid != target_net.bssid and n.display_name().strip() == target_name and n.channel != target_net.channel]
+        if related:
+            repl.print("\n  [bold yellow][WARNING] Multi-Band Target Detected![/bold yellow]")
+            repl.print(f"  Target ESSID '{target_net.display_name()}' spans channels: {channel} and {', '.join(str(n.channel) for n in related)}")
+            repl.print("  [yellow]Deauthenticating clients may cause them to seamlessly roam to the other band,[/yellow]")
+            repl.print("  [yellow]resulting in a missed handshake if only monitoring one channel.[/yellow]\n")
+            
+            choices = [f"Continue on current channel {channel} only (May miss roam)"]
+            avail_ifaces = [name for name, chip in monitor_ifaces if name != iface]
+            if avail_ifaces:
+                choices.insert(0, "Dual-Adapter Capture - Monitor both bands simultaneously (Recommended)")
+            choices.append(f"Follow the Roam - Hop between {channel} and {related[0].channel} (Not recommended)")
+            
+            res = prompt_choice("How would you like to proceed?", choices)
+            if res.cancelled: return None
+            
+            if "Follow the Roam" in res.value:
+                channel = f"{channel},{related[0].channel}"
+            elif "Dual-Adapter" in res.value:
+                if len(avail_ifaces) == 1:
+                    sec_iface = avail_ifaces[0]
+                else:
+                    sec_res = prompt_choice("Select secondary monitor interface for 5GHz:", [f"{name}{chip}" for name, chip in monitor_ifaces if name != iface])
+                    if sec_res.cancelled: return None
+                    sec_iface = sec_res.value.split(" ")[0]
+                iface = (iface, sec_iface)
+                channel = (int(channel), int(related[0].channel))
+
     # 3. Client MAC selection
     client = "FF:FF:FF:FF:FF:FF"
     clients = repl.session.clients
@@ -187,12 +243,31 @@ async def _get_deauth_params(repl, default_count=10):
     except ValueError:
         count = default_count
 
+    # 5. Deauth rate selection
+    rate_choices = {
+        "Recommended (128 pps)": 128,
+        "Fast (256 pps)": 256,
+        "Slow (64 pps)": 64,
+        "Custom...": -1,
+    }
+    rate_res = prompt_choice("Deauth packet rate", list(rate_choices.keys()), default=0)
+    if rate_res.cancelled: return None
+    
+    rate = rate_choices[rate_res.value]
+    if rate == -1:
+        custom_rate_res = prompt_text("Custom rate (packets per second)", default="128")
+        if custom_rate_res.cancelled: return None
+        try:
+            rate = int(custom_rate_res.value)
+        except ValueError:
+            rate = 128
+
     # Save to session
     repl.session.last_iface = iface
     repl.session.last_bssid = bssid
     repl.session.last_channel = channel
 
-    return iface, bssid, channel, client, count
+    return iface, bssid, channel, client, count, rate
 
 async def cmd_capture_passive(repl):
     params = await _get_capture_params(repl)
@@ -254,9 +329,11 @@ async def cmd_capture_passive(repl):
                 except asyncio.CancelledError:
                     pass
             live.update(render(), refresh=True)
-        if res:
-            print_success(f"Status: {res.status}")
-            _record_capture_result(repl, out + "-01.cap", res)
+        kept, validation = _keep_or_delete_capture(repl, out + "-01.cap", res)
+        if validation and validation.status in ("partial", "full"):
+            print_success(f"Status: {validation.status}")
+        elif kept:
+            print_warning("No handshake captured, but capture was kept by config.")
         else:
             print_error("No handshake captured (timed out).")
     except KeyboardInterrupt:
@@ -269,7 +346,7 @@ async def cmd_capture_passive(repl):
 async def cmd_capture_deauth(repl):
     params = await _get_deauth_params(repl, default_count=10)
     if not params: return
-    iface, bssid, channel, client, count = params
+    iface, bssid, channel, client, count, rate = params
     
     conf = prompt_confirm("Start Deauth Capture?")
     if conf.cancelled or not conf.value: return
@@ -317,6 +394,7 @@ async def cmd_capture_deauth(repl):
                     channel=channel,
                     output_prefix=out,
                     count=count,
+                    rate=rate,
                     timeout=300,
                     on_progress=on_progress
                 )
@@ -328,9 +406,11 @@ async def cmd_capture_deauth(repl):
                 except asyncio.CancelledError:
                     pass
             live.update(render(), refresh=True)
-        if res:
-            print_success(f"Status: {res.status}")
-            _record_capture_result(repl, out + "-01.cap", res)
+        kept, validation = _keep_or_delete_capture(repl, out + "-01.cap", res)
+        if validation and validation.status in ("partial", "full"):
+            print_success(f"Status: {validation.status}")
+        elif kept:
+            print_warning("Failed to capture handshake, but capture was kept by config.")
         else:
             print_error("Failed to capture handshake (timed out).")
     except KeyboardInterrupt:

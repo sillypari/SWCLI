@@ -13,6 +13,8 @@ SCAN_FIELD_GROUPS = [
         [
             ("ESSID", "Network name. [HIDDEN] means the SSID was not visible in the scan data."),
             ("BSSID", "Access point MAC address."),
+            ("MANUF", "Manufacturer from the MAC OUI lookup when available."),
+            ("RXQ", "Receive quality. Shown only when advanced scan info is enabled and the scan is fixed to one channel."),
             ("PWR", "Signal strength reported by the adapter. Closer to zero is stronger; -1 means unknown."),
             ("Beacons", "Beacon frames seen from the AP. Healthy APs usually send these steadily."),
             ("#Data", "Captured data packets for the AP. For WEP this is effectively the IV count."),
@@ -32,9 +34,12 @@ SCAN_FIELD_GROUPS = [
         [
             ("ESSID", "Network name of the associated AP when known."),
             ("STATION", "Client device MAC address."),
+            ("MANUF", "Client manufacturer from the MAC OUI lookup when available."),
             ("BSSID", "Associated AP MAC address, or not associated when the client is probing."),
             ("PWR", "Client signal strength. -1 often means only AP-to-client traffic was heard."),
-            ("PKTS", "Packets seen from that client."),
+            ("RATE", "AP-to-client and client-to-AP data rates in Mbit/s. Hidden unless advanced scan info is enabled."),
+            ("LOST", "Airodump estimated missed packets from that client. Hidden unless advanced scan info is enabled."),
+            ("FRAMES", "Frames seen from that client. Hidden unless advanced scan info is enabled."),
             ("PROBE", "SSID requested by a client while searching for networks."),
             ("HE", "High Efficiency / 802.11ax capability indicator when detected."),
             ("FLAGS", "Client-side notes such as EAPOL activity."),
@@ -48,9 +53,13 @@ ATTACK_FIELD_GROUPS = [
         "Evil Twin",
         [
             ("What it does", "Starts a rogue AP using airbase-ng with a chosen ESSID and channel."),
+            ("Commands", "/attack evil-twin and /attack evil-twin-simple run Simple logging; /attack evil-twin-pass runs the password-validation lab flow."),
             ("Target", "Select from the current scan/session target, then confirm the ESSID to broadcast."),
             ("Clone BSSID", "Optional. Uses airbase-ng -a to beacon with the target BSSID when requested."),
-            ("Required", "Monitor interface, ESSID, channel, and authorization for the test scope."),
+            ("Client network", "Configures at0 and starts one dnsmasq instance for DHCP plus wildcard DNS capture."),
+            ("Portal modes", "Simple supports notice or captive-trigger logging. Pass uses the password-validation portal flow."),
+            ("Captive trigger", "Captive/password modes serve the portal for OS probe URLs so phones open the sign-in flow."),
+            ("Required", "Monitor interface, ESSID, channel, airbase-ng, dnsmasq, and authorization for the test scope."),
         ],
     ),
     (

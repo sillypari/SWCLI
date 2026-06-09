@@ -26,7 +26,7 @@ KNOWN_DEVICES: dict[tuple[int, int], dict] = {
     (0x2357, 0x0120): {"name": "RTL8821AU", "chipset": "RTL8821AU", "bands": ["2.4G", "5G"], "monitor": True, "injection": True},
     (0x2357, 0x011E): {"name": "RTL8821AU", "chipset": "RTL8821AU", "bands": ["2.4G", "5G"], "monitor": True, "injection": True},
     (0x0BDA, 0x8812): {"name": "RTL8812AU", "chipset": "RTL8812AU", "bands": ["2.4G", "5G"], "monitor": True, "injection": True},
-    # MT7902 (PCIe built-in): emergency fallback. Runtime success depends on driver support.
+    # MT7902 (PCIe built-in)
     (0x14C3, 0x7902): {"name": "MT7902",    "chipset": "MT7902",   "bands": ["2.4G", "5G", "6G"], "monitor": True, "injection": True},
 }
 
@@ -34,7 +34,7 @@ ADAPTER_PRIORITY: dict[str, int] = {
     "RTL8821AU": 10,
     "RTL8812AU": 9,
     "RT5370": 5,
-    "MT7902": 1,
+    "MT7902": 8,
     "MT7601U": 3,
 }
 
@@ -57,7 +57,7 @@ class AdapterInfo:
     injection_capable: bool = False
     is_up: bool = False
     current_mode: str = ""  # "managed", "monitor", "unknown"
-    status: str = "UNKNOWN"  # "OPTIMIZED", "WORKING", "LIMITED", "EMERGENCY"
+    status: str = "UNKNOWN"  # "OPTIMIZED", "WORKING", "LIMITED"
 
     def display_status(self) -> str:
         """Human-readable status with emoji."""
@@ -68,8 +68,6 @@ class AdapterInfo:
                 return "[~] WORKING"
             case "LIMITED":
                 return "[-] LIMITED"
-            case "EMERGENCY":
-                return "[!] EMERGENCY"
             case _:
                 return "[?] UNKNOWN"
 
@@ -225,9 +223,7 @@ async def detect_adapter(iface: str) -> Optional[AdapterInfo]:
         info.injection_capable = False
 
     # Set status based on capabilities
-    if info.chipset == "MT7902":
-        info.status = "EMERGENCY"
-    elif info.injection_capable and info.monitor_capable:
+    if info.injection_capable and info.monitor_capable:
         info.status = "OPTIMIZED"
     elif info.monitor_capable:
         info.status = "WORKING"
@@ -258,12 +254,33 @@ async def discover_all_adapters() -> list[AdapterInfo]:
         adapter = await detect_adapter(iface)
         if adapter:
             adapters.append(adapter)
+    adapters = _collapse_monitor_vifs(adapters)
     # Sort by priority (best first)
     adapters.sort(
         key=lambda a: ADAPTER_PRIORITY.get(a.chipset, 0),
         reverse=True,
     )
     return adapters
+
+
+def _collapse_monitor_vifs(adapters: list[AdapterInfo]) -> list[AdapterInfo]:
+    """Hide managed base interfaces when their '<iface>mon' VIF is active."""
+    by_iface = {adapter.iface: adapter for adapter in adapters}
+    skip: set[str] = set()
+
+    for adapter in adapters:
+        if not adapter.iface.endswith("mon"):
+            continue
+        base_name = adapter.iface[:-3]
+        base = by_iface.get(base_name)
+        if not base:
+            continue
+        same_phy = adapter.phy and base.phy and adapter.phy == base.phy
+        same_hardware = adapter.mac and base.mac and adapter.mac == base.mac
+        if same_phy or same_hardware:
+            skip.add(base.iface)
+
+    return [adapter for adapter in adapters if adapter.iface not in skip]
 
 
 def get_best_adapter(
@@ -283,17 +300,14 @@ def get_best_adapter(
         return None
 
     if operation == "internet":
-        # MT7902 preferred for internet connectivity
+        # MT7902 is the preferred built-in adapter for connectivity.
         for a in adapters:
             if a.chipset == "MT7902":
                 return a
         return adapters[-1]
 
     if operation in ("deauth", "inject", "evil_twin"):
-        capable = [
-            a for a in adapters
-            if a.monitor_capable and (a.injection_capable or a.chipset == "MT7902")
-        ]
+        capable = [a for a in adapters if a.monitor_capable and a.injection_capable]
     else:
         capable = [a for a in adapters if a.monitor_capable]
 
